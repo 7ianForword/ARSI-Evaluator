@@ -1,0 +1,8 @@
+{
+  "name": "arsi-evaluator-opencode-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "opencode-ai": "1.19.6"
+  }
+}

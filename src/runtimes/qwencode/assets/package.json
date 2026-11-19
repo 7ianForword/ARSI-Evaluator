@@ -1,0 +1,8 @@
+{
+  "name": "arsi-evaluator-qwencode-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@qwen-code/qwen-code": "0.28.0"
+  }
+}

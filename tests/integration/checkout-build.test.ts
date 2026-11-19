@@ -12,6 +12,8 @@ async function fixture(): Promise<string> {
   for (const dir of ["src", "scripts", "dist", "bin", "src/infrastructure/ray/python", "src/application/ray/entries", "src/plugins/verifiers/python/runtime", "src/runtimes/pi", "src/runtimes/dsh/assets", "src/runtimes/deepagents/assets", "src/runtimes/dify/assets", "src/runtimes/jiuwenswarm/assets", "src/runtimes/agentbundle/assets", "src/plugins/benchmarks/agent-harness/profiles", "src/plugins/benchmarks/inference-engine/profiles", "src/plugins/benchmarks/operator/profiles"]) await mkdir(join(root, dir), { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
   await writeFile(join(root, "package-lock.json"), JSON.stringify({ packages: { "": {} } }));
+  await mkdir(join(root, "src/infrastructure/network"), { recursive: true });
+  await writeFile(join(root, "src/infrastructure/network/package-mirror.mjs"), "export {};\n");
   await mkdir(join(root, "src/infrastructure/models"), { recursive: true });
   await cp(new URL("../../src/infrastructure/models/reasoning-effort.mjs", import.meta.url),
     join(root, "src/infrastructure/models/reasoning-effort.mjs"));
@@ -23,7 +25,7 @@ async function fixture(): Promise<string> {
   await writeFile(join(root, "src/cli.ts"), "fixture");
   await writeFile(join(root, "src/plugins/benchmarks/agent-harness/profiles/fixture.yaml"), "id: fixture\n");
   await writeFile(join(root, "src/runtimes/dify/assets/runner.mjs"), "export {};\n");
-  for (const runtime of ["codex", "claudecode", "zcode", "trae", "codebuddy"]) {
+  for (const runtime of ["codex", "claudecode", "zcode", "trae", "codebuddy", "qwencode", "kimicode", "minimaxcode", "opencode"]) {
     const assets = join(root, "src/runtimes", runtime, "assets");
     await mkdir(assets, { recursive: true });
     await writeFile(join(assets, "launch.mjs"), "export {};\n");
@@ -90,7 +92,11 @@ test.skipIf(process.platform === "win32")("concurrent stale-checkout CLI starts 
   expect(await readFile(join(root, "dist/cli-runtime.js"), "utf8")).not.toContain('await import("./cli-runtime.js")');
   expect(await readFile(join(root, "dist/plugins/benchmarks/agent-harness/profiles/fixture.yaml"), "utf8")).toBe("id: fixture\n");
   expect(await readFile(join(root, "dist/runtimes/dify/assets/runner.mjs"), "utf8")).toBe("export {};\n");
+  expect(await readFile(join(root, "dist/infrastructure/network/package-mirror.mjs"), "utf8")).toBe("export {};\n");
   expect(await readFile(join(root, "dist/runtimes/shared/assets/stage-attachments.mjs"), "utf8")).toBe("export {};\n");
+  for (const runtime of ["qwencode", "kimicode", "minimaxcode", "opencode"]) {
+    expect(await readFile(join(root, "dist/runtimes", runtime, "assets/launch.mjs"), "utf8")).toBe("export {};\n");
+  }
   expect(await readFile(join(root, "dist/runtimes/agentx/assets/runner.py"), "utf8")).toBe("# AgentX bridge fixture\n");
   expect(await readFile(join(root, "dist/runtimes/agentx/assets/reasoning_effort.py"), "utf8")).toBe("# Shared effort fixture\n");
   expect(await readFile(join(root, "dist/runtimes/hermes/assets/runner.py"), "utf8")).toBe("# Hermes output capture fixture\n");

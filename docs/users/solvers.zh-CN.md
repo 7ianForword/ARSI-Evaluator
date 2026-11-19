@@ -16,6 +16,8 @@ Benchmark 决定任务和评分，Solver 决定模型请求或 Agent 怎样执�
 | TRAE | 支持关闭全部工具及禁用网页工具。锁定版本的非交互 `exec` 拒绝显式启用搜索或抓取。 |
 | Codex | `tools: none` 映射为 `shellTool: disabled`，通过 `--disable shell_tool` 移除 Shell 工具。锁定版本仍会声明 `request_user_input` 等其他工具。`webSearch` 单独控制原生搜索，打开网页属于原生实时搜索能力。 |
 | DeepSeek Harness、JiuwenSwarm | 支持关闭全部工具。网页功能沿用 Harness 自己的服务和配置，显式开启需要对应原生工具可用。 |
+| Qwen Code、Kimi Code CLI、MiniMax Code | 支持关闭全部工具，关闭搜索、关闭或启用原生抓取。原生均支持搜索，但适配器尚未接入搜索服务配置，当前显式启用搜索会报 `CONFIG_INVALID`。 |
+| OpenCode | 支持关闭全部工具，以及独立开启或关闭原生搜索和抓取。搜索使用 OpenCode 的 Exa 服务，实际执行需要能访问该服务。 |
 
 网页开关控制模型可调用的网页工具。保留 Bash 时，命令能否联网由求解环境决定。MMLU-Pro 可在 Docker 中设置 `benchmark.config.solveNetwork: model-api`，让每个求解容器只访问模型 API。可直接使用 [MMLU-Pro Playbook](../../playbook/mmlu-pro/mmlu-pro-simpleagent.yaml)。
 
@@ -31,6 +33,7 @@ Benchmark 决定任务和评分，Solver 决定模型请求或 Agent 怎样执�
 | `zcode` | 用 ZCode CLI 处理文本、图片和 PDF，在本机和 Docker 中执行 Bash | 支持流式 Chat Completions、Responses 或 Messages 和工具调用的模型服务 |
 | `trae` | 用 TRAE CLI 2.0 处理文本、图片和 PDF 页图，执行 shell 命令 | 支持流式 Chat Completions、Responses 或 Messages 和工具调用的模型服务 |
 | `codebuddy` | 用 CodeBuddy Code 处理文本、图片和 PDF 页图，执行 shell 命令 | 支持流式 Chat Completions 或 Responses 和工具调用的模型服务 |
+| `qwencode`、`kimicode`、`minimaxcode`、`opencode` | 使用对应的正式 Code CLI，处理文本、图片、PDF 页图与工具任务 | 支持流式 Chat Completions、Responses 或 Messages 的模型服务 |
 | `agentx-replay` | 按 Trace 请求模型，测量服务性能 | AgentX 所需的流式 API、长上下文、tokenizer 和 Python 或 Docker |
 | `choice-logprobs` | 直接请求单个输出位置的候选概率，供 MMLU 评分 | local 环境；模型服务必须实际返回 logprobs/top_logprobs；按需关闭思考 |
 
@@ -265,6 +268,58 @@ output:
 - `solver.config.maxTurns` 接受正整数，映射到 CodeBuddy 原生 `--max-turns`，限制每次求解的 Agent 执行轮数。省略时不传该参数，保留 CLI 默认值。轮数限制与 `run.solveTimeoutSeconds` 分别生效，先达到的限制会结束求解。
 - Windows 原生开放 PowerShell，WSL 和 Docker 开放 Bash。本机命令按宿主进程权限运行，只用于可信任务。Docker 命令在任务容器内执行。
 - 工作区的 `.codebuddy/models.json` 会覆盖实验指定的模型端点，发现该文件时 Solver 会在启动 CLI 前报错。使用图片或 PDF `pages` 附件时，设置 `inputModalities: [text, image]`。原生 PDF、任务技能和任务 MCP 配置暂不支持。每次 attempt 在 `agent/` 下保存脱敏的会话事件、轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
+
+## 使用 Qwen Code、Kimi Code CLI、MiniMax Code 和 OpenCode
+
+Evaluator 固定安装以下正式 CLI；不读取宿主已有登录状态，也不使用旧版 Python Kimi CLI。
+
+| Solver 名 | 安装包 | 版本 | 轮次配置对应操作 |
+| --- | --- | --- | --- |
+| `qwencode` | `@qwen-code/qwen-code` | `0.28.0` | `--max-session-turns`、`model.maxSessionTurns`，并限制本次尝试发出的模型请求数，避免 ACP 忽略启动参数 |
+| `kimicode` | `@moonshot-ai/kimi-code` | `2.7.0` | `loop_control.max_steps_per_turn` |
+| `minimaxcode` | `@minimax-ai/code` | `0.7.8` | `exec --max-steps` |
+| `opencode` | `opencode-ai` | `1.19.6` | `agent.build.steps`，另加模型请求数限制；原生 `steps` 只是要求模型收尾的提示，不能阻止模型继续调用工具 |
+
+在现有实验中选择 Solver，其他 Benchmark 参数照常保留：
+
+```yaml
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+    api: openai-completions
+    reasoningEffort: low
+    maxTokens: 65536
+    # 只有所选模型支持图片时才声明 image。
+    inputModalities: [text, image]
+benchmark:
+  name: mmlu_pro
+  config:
+    solveNetwork: model-api
+  solver:
+    name: qwencode # 或 kimicode、minimaxcode、opencode
+    config:
+      tools: none
+      webSearch: disabled
+      webFetch: disabled
+      maxTurns: 2000
+environment: docker
+run:
+  solveTimeoutSeconds: 600
+```
+
+`maxTokens` 控制单次回复，`maxTurns` 控制模型执行步数，`solveTimeoutSeconds` 控制整题时间，三者分别生效。省略 `maxTokens`、`maxTurns` 时采用 CLI 原有默认值。MiniMax 自定义模型默认单次输出上限为 16,384 Token；填写服务 `maxTokens` 可以覆盖它。Kimi 的原生 Chat 配置不发送输出上限，Evaluator 在模型转发入口补上显式 `maxTokens`。Qwen、Kimi、MiniMax 的模型上下文可用 `services.<名称>.contextWindow` 设置；Kimi 和 MiniMax 的未知自定义模型采用 200,000 上下文回退值，使用长上下文服务时应按服务能力填写。
+
+四者均按所选服务的 `api` 选择协议；服务 `reasoningEffort` 优先于 CLI 默认档位，并在实际模型请求中再次应用，避免被 CLI 的模型名称推断改写。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`；PDF 使用附件 `pages` 模式，当前不声明原生 PDF、音频或视频支持。Qwen 使用原生 `--safe-mode` 禁止自动加载自定义上下文、Hook、扩展和 MCP，该模式也会关闭原生搜索；OpenCode 禁用项目配置，并关闭会话标题生成。当前不接入任务提供的 Skills 和 MCP，遇到此类任务会明确报不支持。
+
+`tools: none` 同时使用原生工具配置和模型入口检查：每轮请求不带工具声明，模型意外返回工具调用时阻止其进入 CLI。MiniMax 的原生能力空列表仍会保留任务查询、目标和 MCP 入口，因此还需要这一检查。Qwen 的无工具名单与锁定版本配套维护。单独关闭网页工具时保留文件和 Shell 工具；Shell 的网络权限仍由环境控制。
+
+保留普通工具并启用抓取可设置 `tools: default`、`webFetch: enabled`。OpenCode 还可设置 `webSearch: enabled`，使用其原生 Exa 搜索。另三者原生也有搜索能力，但当前适配器尚未配置相应搜索后端和认证，显式开启时会报错。Qwen 在受支持的配置下可以复用模型服务凭据，并不总是需要单独的搜索 key；不能仅凭模型 API 可用就判断搜索服务可用。关闭搜索不限制 Shell 自行联网。
+
+MiniMax 安装时会验证 SQLite 原生模块；如果预编译模块下载失败，原生安装器可能需要 Python、make 和 C++ 编译器。Qwen、Kimi 和 MiniMax 使用 Node.js 24；OpenCode 安装当前平台的正式二进制。下载源、Docker 源和代理使用[网络配置](network.zh-CN.md)，优先用 `--network` 指定可用来源。npm 镜像源尚未同步 MiniMax `0.7.8` 时，将网络 YAML 的 `sources.npm.registry` 改为 `https://registry.npmjs.org`。每次先运行 `warmup`，成功后再 `run`；[MMLU-Pro Playbook](../../playbook/mmlu-pro/) 提供四套示例。
+
+运行产物保存原生 JSONL/ACP 事件、最终答案和用量。ACP 的 `usage_update` 通常表示上下文占用，不能当作累计 Token；优先采用原生最终用量，缺失时采用完整模型响应上报的用量，未上报的值保留为空。
 
 ## 使用 AgentBundle
 

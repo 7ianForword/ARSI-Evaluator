@@ -16,6 +16,8 @@ Set `benchmark.solver.config.tools: none` to disable solver tools as described b
 | TRAE | Supports disabling all tools or either web tool. The pinned non-interactive `exec` does not support explicitly enabling search or fetch. |
 | Codex | `tools: none` maps to `shellTool: disabled` and removes shell tools with `--disable shell_tool`. The pinned CLI still declares tools such as `request_user_input`. `webSearch` controls native search separately. Opening pages is part of live search. |
 | DeepSeek Harness, JiuwenSwarm | Support disabling all tools. Explicitly enabled web tools require the corresponding native service. |
+| Qwen Code, Kimi Code CLI, MiniMax Code | Support disabling all tools, disabling search, and enabling or disabling fetch. These adapters do not yet configure native search backends; explicit search returns `CONFIG_INVALID`. |
+| OpenCode | Supports disabling all tools and independent native search/fetch switches. Search uses OpenCode's Exa service and requires network access to it. |
 
 The environment controls whether shell commands can access the network. For MMLU-Pro, `benchmark.config.solveNetwork: model-api` with Docker allows the solve container to reach only the model API. See the [MMLU-Pro Playbook](../../playbook/mmlu-pro/mmlu-pro-simpleagent.yaml).
 
@@ -31,6 +33,7 @@ The environment controls whether shell commands can access the network. For MMLU
 | `zcode` | ZCode CLI for text, images, PDFs, and Bash in local and Docker runs | Model service with streaming Chat Completions, Responses, or Messages and tool calling |
 | `trae` | TRAE CLI 2.0 for text, images, PDF pages, and shell commands | Model service with streaming Chat Completions, Responses, or Messages and tool calling |
 | `codebuddy` | CodeBuddy Code for text, images, PDF pages, and shell commands | Model service with streaming Chat Completions or Responses and tool calling |
+| `qwencode`, `kimicode`, `minimaxcode`, `opencode` | Official Code CLIs for text, images, PDF pages and tool tasks | A streaming Chat Completions, Responses or Messages service |
 | `agentx-replay` | Trace-driven model requests for service performance | Streaming API, long context, tokenizer, and Python or Docker |
 | `choice-logprobs` | Candidate probabilities at one output position for MMLU | local environment; actual logprobs/top_logprobs support; disable thinking when needed |
 
@@ -265,6 +268,56 @@ output:
 - `solver.config.maxTurns` accepts a positive integer and maps to CodeBuddy's native `--max-turns`, limiting agentic turns per solve. When omitted, Evaluator leaves the CLI default unchanged. The turn limit and `run.solveTimeoutSeconds` apply independently; whichever is reached first ends the solve.
 - Native Windows exposes PowerShell. WSL and Docker expose Bash. Local commands run with the host process's permissions, so use local mode for trusted tasks. Docker commands run in the task container.
 - A workspace `.codebuddy/models.json` can override the selected endpoint. The solver reports an error before starting CodeBuddy when the file is present. For images and PDF `pages` attachments, declare `inputModalities: [text, image]`. Native PDF, task skills, and task MCP configuration are unsupported. Each attempt saves redacted events, trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
+
+## Qwen Code, Kimi Code CLI, MiniMax Code and OpenCode
+
+Select `qwencode`, `kimicode`, `minimaxcode`, or `opencode` in `benchmark.solver.name`. Evaluator installs the pinned official CLIs in an isolated runtime and does not reuse host login state.
+
+| Solver | Package | Version | `solver.config.maxTurns` |
+| --- | --- | --- | --- |
+| `qwencode` | `@qwen-code/qwen-code` | `0.28.0` | Native `--max-session-turns` / `model.maxSessionTurns`, plus a model-request ceiling because ACP can ignore the startup limit |
+| `kimicode` | `@moonshot-ai/kimi-code` | `2.7.0` | Native `loop_control.max_steps_per_turn` |
+| `minimaxcode` | `@minimax-ai/code` | `0.7.8` | Native `exec --max-steps` |
+| `opencode` | `opencode-ai` | `1.19.6` | Native `agent.build.steps`, plus a model-request ceiling: the native setting only prompts the model to wrap up |
+
+```yaml
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+    api: openai-completions
+    reasoningEffort: low
+    maxTokens: 65536
+    # Declare image only when the selected model supports it.
+    inputModalities: [text, image]
+benchmark:
+  name: mmlu_pro
+  config:
+    solveNetwork: model-api
+  solver:
+    name: qwencode # kimicode, minimaxcode, or opencode
+    config:
+      tools: none
+      webSearch: disabled
+      webFetch: disabled
+      maxTurns: 2000
+environment: docker
+run:
+  solveTimeoutSeconds: 600
+```
+
+`services.*.maxTokens` overrides the native per-response output limit; `solver.config.maxTurns` limits agent model steps; `run.solveTimeoutSeconds` sets the whole-task deadline. Omitted limits preserve CLI defaults. MiniMax custom models default to 16,384 output tokens. Kimi does not apply its native output-cap option to Chat requests, so Evaluator adds an explicit service limit at the model relay. Configure `services.*.contextWindow` for the actual service capacity; unknown custom models in Kimi and MiniMax fall back to a 200,000-token context window.
+
+All four select Chat Completions, Responses, or Messages from the selected service's `api`. Explicit service `reasoningEffort` overrides native defaults and model-name inference. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. Use `pages` mode for PDF attachments. Qwen uses native `--safe-mode` to skip custom context, hooks, extensions and MCP discovery; this mode also disables its native search. OpenCode disables project configuration and session title generation. Native PDF, audio, video, task-provided Skills and MCP servers are not currently supported.
+
+`tools: none` uses native tool controls and checks the model boundary: requests contain no tool declarations and unexpected tool responses cannot reach the CLI. MiniMax's native empty capability lists still leave task/goal/MCP helpers, requiring the additional check. Qwen's native deny list is maintained with its pinned version. Disabling web tools alone preserves ordinary file/Shell tools; environment policy still controls Shell network access.
+
+All four support `webFetch: enabled` or `disabled` with `tools: default`. OpenCode also supports `webSearch: enabled`, using its native Exa service. Qwen, Kimi and MiniMax provide native search, but these adapters do not yet configure their search backends or authentication. Qwen can reuse compatible provider credentials in supported configurations; a separate search key is not always required. Explicit `webSearch: enabled` on these three currently returns `CONFIG_INVALID` instead of assuming the selected inference endpoint supports search.
+
+MiniMax installation verifies its native SQLite module; if its prebuilt binary cannot be downloaded, the native installer may require Python, make and a C++ compiler. Node 24 is required; OpenCode installs the official platform binary. Use [network configuration](network.md) for registry and Docker sources. If a registry mirror has not synchronized MiniMax `0.7.8`, set `sources.npm.registry` to `https://registry.npmjs.org`. Run `warmup` before `run`; four [MMLU-Pro examples](../../playbook/mmlu-pro/) are provided.
+
+Artifacts retain native JSONL/ACP events, final text and usage. ACP `usage_update` is context occupancy, not cumulative usage. Evaluator uses native final usage when available and otherwise complete model-response usage; unreported usage remains missing.
 
 ## AgentBundle
 

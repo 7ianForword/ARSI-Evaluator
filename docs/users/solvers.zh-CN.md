@@ -249,6 +249,8 @@ benchmark:
   solver:
     name: codebuddy
     service: codebuddy
+    config:
+      maxTurns: 2000
 environment: local
 run:
   maxTasks: 1
@@ -259,7 +261,8 @@ output:
   directory: ./results/codebuddy
 ```
 
-- `base_url` 填 API 基址，例如 `https://api.openai.com/v1`。也可选 `api: openai-responses`。`maxTokens` 指定模型输出上限，省略 `contextWindow` 和 `retry`。`solver.config` 可省略或填 `{}`。
+- `base_url` 填 API 基址，例如 `https://api.openai.com/v1`。也可选 `api: openai-responses`。`maxTokens` 指定模型输出上限，省略 `contextWindow` 和 `retry`。
+- `solver.config.maxTurns` 接受正整数，映射到 CodeBuddy 原生 `--max-turns`，限制每次求解的 Agent 执行轮数。省略时不传该参数，保留 CLI 默认值。轮数限制与 `run.solveTimeoutSeconds` 分别生效，先达到的限制会结束求解。
 - Windows 原生开放 PowerShell，WSL 和 Docker 开放 Bash。本机命令按宿主进程权限运行，只用于可信任务。Docker 命令在任务容器内执行。
 - 工作区的 `.codebuddy/models.json` 会覆盖实验指定的模型端点，发现该文件时 Solver 会在启动 CLI 前报错。使用图片或 PDF `pages` 附件时，设置 `inputModalities: [text, image]`。原生 PDF、任务技能和任务 MCP 配置暂不支持。每次 attempt 在 `agent/` 下保存脱敏的会话事件、轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 

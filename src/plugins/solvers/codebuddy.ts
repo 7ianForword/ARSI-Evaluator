@@ -7,13 +7,20 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
+import { expectPositiveInteger, expectRecord } from "../../core/validation/input.js";
 import { parseSolverToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { consumeCodeBuddy } from "../../runtimes/codebuddy/protocol.js";
 import { CODEBUDDY_ENTRY, CODEBUDDY_VERSION, codeBuddyRuntimeInstallation } from "../../runtimes/codebuddy/runtime.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 
-export function parseCodeBuddyConfig(value: unknown): SolverToolPolicy {
-  return parseSolverToolPolicy(value, "codebuddy config");
+export type CodeBuddyConfig = SolverToolPolicy & { maxTurns?: number };
+
+export function parseCodeBuddyConfig(value: unknown): CodeBuddyConfig {
+  const config = expectRecord(value, "codebuddy config");
+  return {
+    ...parseSolverToolPolicy(config, "codebuddy config", ["maxTurns"]),
+    ...(config.maxTurns === undefined ? {} : { maxTurns: expectPositiveInteger(config.maxTurns, "codebuddy config.maxTurns") }),
+  };
 }
 
 function apiBase(endpoint: string | null): string {
@@ -29,7 +36,7 @@ export class CodeBuddySolver implements Solver {
   readonly inputModalities = ["text", "image"] as const;
   private readonly endpoint: string;
 
-  constructor(private readonly binding: ServiceBinding, private readonly policy: SolverToolPolicy = {}) {
+  constructor(private readonly binding: ServiceBinding, private readonly config: CodeBuddyConfig = {}) {
     const { model } = binding;
     if (model.api !== "openai-completions" && model.api !== "openai-responses") {
       throw new TypeError("codebuddy requires api: openai-completions or openai-responses on its selected service");
@@ -48,13 +55,16 @@ export class CodeBuddySolver implements Solver {
 
   async provenance(signal: AbortSignal): Promise<SolverProvenance> {
     signal.throwIfAborted();
-    return { ...toolPolicyProvenance(this.policy, "codebuddy-native"), codebuddyVersion: CODEBUDDY_VERSION };
+    const { maxTurns, ...policy } = this.config;
+    return { ...toolPolicyProvenance(policy, "codebuddy-native"), codebuddyVersion: CODEBUDDY_VERSION,
+      ...(maxTurns === undefined ? {} : { maxTurns: String(maxTurns) }) };
   }
 
   async solve(input: PublicTask, session: EnvironmentSession, context: AttemptContext): Promise<SolveResult> {
     const { signal } = context;
     signal.throwIfAborted();
     const { model, auth } = this.binding;
+    const { maxTurns, ...toolPolicy } = this.config;
     if (!auth.value.trim() || /[\r\n\0]/u.test(auth.value)) {
       throw new EvaluatorError("MODEL_AUTH_FAILED", "codebuddy requires a non-empty, single-line API key on its selected service");
     }
@@ -84,7 +94,7 @@ export class CodeBuddySolver implements Solver {
         env: { NODE_USE_ENV_PROXY: "1" },
         inheritEnv: false,
         input: Buffer.from(JSON.stringify({
-          apiKey: auth.value, api: model.api, baseUrl, model: model.name, maxTokens: model.maxTokens, reasoningEffort: model.reasoningEffort, toolPolicy: this.policy,
+          apiKey: auth.value, api: model.api, baseUrl, model: model.name, maxTokens: model.maxTokens, reasoningEffort: model.reasoningEffort, maxTurns, toolPolicy,
           supportsImages: model.inputModalities?.includes("image") ?? false, prompt: input.prompt, token, media,
         }), "utf8"),
       }, signal);

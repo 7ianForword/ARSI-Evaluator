@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { startModelRelay } from "./runtimes/shared/assets/model-relay.mjs";
 
 const [home, entry] = process.argv.slice(2);
-const { apiKey, api, baseUrl, model, maxTokens, reasoningEffort, supportsImages, prompt, token, media, toolPolicy = {} } = JSON.parse(readFileSync(0, "utf8"));
+const { apiKey, api, baseUrl, model, maxTokens, reasoningEffort, maxTurns, supportsImages, prompt, token, media, toolPolicy = {} } = JSON.parse(readFileSync(0, "utf8"));
 
 // The model loader in CodeBuddy 2.183.0 reads this file independently of --setting-sources.
 const projectModels = await lstat(join(process.cwd(), ".codebuddy", "models.json")).catch(error => {
@@ -44,6 +44,7 @@ try {
     "--print", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json", "--model", model,
     "--setting-sources", "user", "--strict-mcp-config", "--no-session-persistence",
     ...(reasoningEffort === undefined ? [] : ["--effort", reasoningEffort]),
+    ...(maxTurns === undefined ? [] : ["--max-turns", String(maxTurns)]),
     "--tools", tools.join(","), "--permission-mode", "dontAsk",
     ...(tools.length ? ["--allowedTools", ...tools] : []),
     ...(denied.length ? ["--disallowedTools", ...denied] : []),

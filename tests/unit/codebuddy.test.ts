@@ -146,3 +146,32 @@ test("CodeBuddy accepts both OpenAI protocols and prepares without a key", async
   }
   await expect(new CodeBuddySolver(binding).runtimeInstallation(AbortSignal.timeout(5000))).resolves.toMatchObject({ id: "codebuddy:2.183.0" });
 });
+
+test("CodeBuddy validates the optional execution turn limit", () => {
+  expect(parseCodeBuddyConfig({ maxTurns: 2000, tools: "none" })).toEqual({ maxTurns: 2000, tools: "none" });
+  for (const maxTurns of [0, -1, 1.5, "2000", null, true, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(() => parseCodeBuddyConfig({ maxTurns })).toThrow(/maxTurns must be a positive integer/u);
+  }
+});
+
+test.each([undefined, 2000])("CodeBuddy passes an explicit maxTurns to its native CLI (%s)", async maxTurns => {
+  const context = await attempt();
+  const root = context.paths.agent;
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  await writeFile(join(root, "fixture-cli.mjs"), `
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(process.argv.slice(2)) }));
+`);
+  const handle = await launch(root, workspace, {
+    apiKey: secrets[0], token: secrets[1], baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions",
+    model: "fixture", supportsImages: false, prompt: "test", media: [], maxTurns,
+  }, "fixture-cli.mjs");
+  const result = await consumeCodeBuddy(handle, context, secrets);
+  const args: string[] = JSON.parse(result.finalText);
+  const index = args.indexOf("--max-turns");
+  if (maxTurns === undefined) expect(index).toBe(-1);
+  else {
+    expect(index).toBeGreaterThan(-1);
+    expect(args[index + 1]).toBe(String(maxTurns));
+  }
+});

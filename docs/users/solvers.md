@@ -249,6 +249,8 @@ benchmark:
   solver:
     name: codebuddy
     service: codebuddy
+    config:
+      maxTurns: 2000
 environment: local
 run:
   maxTasks: 1
@@ -259,7 +261,8 @@ output:
   directory: ./results/codebuddy
 ```
 
-- Set `base_url` to the API base, such as `https://api.openai.com/v1`. You can also select `api: openai-responses`. The solver uses `maxTokens` as the model output limit. Omit `contextWindow` and `retry`, and omit `solver.config` or use `{}`.
+- Set `base_url` to the API base, such as `https://api.openai.com/v1`. You can also select `api: openai-responses`. The solver uses `maxTokens` as the model output limit. Omit `contextWindow` and `retry`.
+- `solver.config.maxTurns` accepts a positive integer and maps to CodeBuddy's native `--max-turns`, limiting agentic turns per solve. When omitted, Evaluator leaves the CLI default unchanged. The turn limit and `run.solveTimeoutSeconds` apply independently; whichever is reached first ends the solve.
 - Native Windows exposes PowerShell. WSL and Docker expose Bash. Local commands run with the host process's permissions, so use local mode for trusted tasks. Docker commands run in the task container.
 - A workspace `.codebuddy/models.json` can override the selected endpoint. The solver reports an error before starting CodeBuddy when the file is present. For images and PDF `pages` attachments, declare `inputModalities: [text, image]`. Native PDF, task skills, and task MCP configuration are unsupported. Each attempt saves redacted events, trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 

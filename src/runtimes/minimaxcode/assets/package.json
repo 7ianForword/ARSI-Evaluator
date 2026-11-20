@@ -1,0 +1,8 @@
+{
+  "name": "arsi-evaluator-minimaxcode-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@minimax-ai/code": "0.7.8"
+  }
+}

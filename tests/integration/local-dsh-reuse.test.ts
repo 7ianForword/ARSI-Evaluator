@@ -75,6 +75,7 @@ else {
   const model=patches.find(entry=>entry.id==='agent-default-model')?.config;
   const provider=patches.find(entry=>entry.id==='llm-pi-ai')?.config.providers[model?.provider];
   if(model?.provider!=='arsi-evaluator'||model.model!=='test'||provider?.baseURL!=='http://example.invalid'||process.env[provider?.apiKeyEnv]!=='route-secret')throw Error('Configured model route was not applied');
+  if(provider?.models?.find(entry=>entry.id===model.model)?.contextWindow!==327680)throw Error('Configured model context window was not applied');
   if(!fs.readFileSync(path.join(process.env.DSH_HOME,'settings.yaml'),'utf8').includes('candidate-a'))throw Error('Candidate settings were replaced');
   const emit=event=>console.log(JSON.stringify(event));
   emit({type:'session',sessionId:'route',cwd:process.cwd()});
@@ -86,7 +87,7 @@ else {
 }
 `);
   const bundle = await f.makeBundle("model-route", "candidate-a");
-  const solver = new AgentBundleSolver(bundle, f.model, { value: "route-secret", reference: null }, undefined, { environmentName: "local" });
+  const solver = new AgentBundleSolver(bundle, { ...f.model, contextWindow: 327680 }, { value: "route-secret", reference: null }, undefined, { environmentName: "local" });
   const result = await f.prepare(solver, "model-route", true);
   expect(result.result?.finalText).toBe("configured route applied");
   expect(await readFile(join(result.record.home, "model.patch.yaml"), "utf8")).not.toContain("route-secret");

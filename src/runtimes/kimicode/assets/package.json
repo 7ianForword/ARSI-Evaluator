@@ -1,0 +1,8 @@
+{
+  "name": "arsi-evaluator-kimicode-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@moonshot-ai/kimi-code": "2.7.0"
+  }
+}

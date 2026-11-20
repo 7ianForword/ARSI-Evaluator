@@ -11,8 +11,13 @@ import { ClaudeCodeSolver, parseClaudeCodeConfig } from "./claudecode.js";
 import { ZCodeSolver, parseZCodeConfig } from "./zcode.js";
 import { TraeSolver, parseTraeConfig } from "./trae.js";
 import { CodeBuddySolver, parseCodeBuddyConfig } from "./codebuddy.js";
+import { NativeCodeSolver, parseNativeCodeConfig } from "./native-code.js";
 
 export function apply(ctx: Context): void {
+  for (const name of ["qwencode", "kimicode", "minimaxcode", "opencode"] as const) {
+    ctx.evaluator.register("solver", name, value => parseNativeCodeConfig(name, value),
+      (config, runtime) => new NativeCodeSolver(name, bindSolverService(runtime), config));
+  }
   ctx.evaluator.register("solver", "claudecode", parseClaudeCodeConfig, (config, runtime) => new ClaudeCodeSolver(bindSolverService(runtime), config));
   ctx.evaluator.register("solver", "codex", parseCodexConfig, (config, runtime) => new CodexSolver(bindSolverService(runtime), config));
   ctx.evaluator.register("solver", "zcode", parseZCodeConfig, (config, runtime) => new ZCodeSolver(bindSolverService(runtime), config));

@@ -14,7 +14,7 @@ export type { EvaluationResult, EvaluatorRunOptions } from "./run.js";
 type ConfigOptions = Pick<EvaluatorRunOptions, "configPath" | "networkConfigPath" | "patchPath" | "env" | "signal">;
 export type DoctorOptions = ConfigOptions & Pick<EvaluatorRunOptions, "overrides">;
 export type DoctorReport = Awaited<ReturnType<typeof diagnoseExperiment>>;
-export type ImageCleanupOptions = ConfigOptions & {
+export type CleanupOptions = ConfigOptions & {
   /** Preview by default. Execution is scoped to the configuration's inventory ownership. */
   execute?: boolean;
 };
@@ -65,9 +65,9 @@ export class Evaluator {
   }
 
   /** Preview or release the image references owned by one experiment configuration. */
-  async cleanupImages(options: ImageCleanupOptions): Promise<ImageCleanupSummary> {
+  async cleanup(options: CleanupOptions): Promise<ImageCleanupSummary> {
     if (options.execute !== undefined && typeof options.execute !== "boolean")
-      throw new TypeError("cleanupImages execute must be a boolean");
+      throw new TypeError("cleanup.execute must be a boolean");
     return withDiagnostics(options, (signal, onLoaded) => cleanupImages({
       file: options.configPath, all: false, execute: options.execute ?? false, signal, onLoaded,
       env: options.env ?? process.env,

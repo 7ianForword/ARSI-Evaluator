@@ -2,7 +2,7 @@
 
 > [English](./sdk.md) | 中文
 
-Evaluator 同时提供 CLI 和 ESM SDK，要求 Node.js 24.22.1 或更新的 24.x。从包根导入 `Evaluator`，创建实例后即可调用 `run()`、`report()`、`doctor()` 和 `cleanupImages()`。现有 `loadConfig`、`bootstrap`、`runEngine` 等低层 API 继续保留。
+Evaluator 同时提供 CLI 和 ESM SDK，要求 Node.js 24.22.1 或更新的 24.x。从包根导入 `Evaluator`，创建实例后即可调用 `run()`、`report()`、`doctor()` 和 `cleanup()`。现有 `loadConfig`、`bootstrap`、`runEngine` 等低层 API 继续保留。
 
 [用户文档](README.zh-CN.md) · [安装指南](installation.zh-CN.md) · [插件开发](../development/plugins.md)
 
@@ -99,10 +99,10 @@ const result = await evaluator.run({
 ```js
 const configPath = "/path/to/experiment.yaml";
 const { checks, network } = await evaluator.doctor({ configPath });
-const preview = await evaluator.cleanupImages({ configPath });
+const preview = await evaluator.cleanup({ configPath });
 ```
 
-`doctor()` 返回逐项配置检查结果和网络诊断报告。要打印解析后的配置，可运行 `arsi-evaluator inspect experiment.yaml`。`cleanupImages()` 默认预览当前配置拥有的镜像引用。传入 `{ configPath, execute: true }` 即可执行清理，并在返回结果的 `nodes` 中查看各镜像引用的处理结果。
+`doctor()` 返回逐项配置检查结果和网络诊断报告。要打印解析后的配置，可运行 `arsi-evaluator inspect experiment.yaml`。`cleanup()` 默认预览当前配置拥有的镜像引用。传入 `{ configPath, execute: true }` 即可执行清理，并在返回结果的 `nodes` 中查看各镜像引用的处理结果。
 
 ## 取消、续跑与报告
 

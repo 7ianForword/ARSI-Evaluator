@@ -34,14 +34,14 @@ export function apply(ctx) {
     const record = JSON.parse(await readFile(join(root, "request.json"), "utf8"));
     expect(record.request).toMatchObject({ all: false, execute: false, configFingerprint: record.fingerprint });
     const evaluator = new Evaluator();
-    await expect(Reflect.apply(evaluator.cleanupImages, evaluator, [{ configPath: file, patchPath: patch, execute: "false" }]))
+    await expect(Reflect.apply(evaluator.cleanup, evaluator, [{ configPath: file, patchPath: patch, execute: "false" }]))
       .rejects.toThrow("execute must be a boolean");
     const controller = new AbortController();
     controller.abort(new Error("cancelled before cleanup"));
-    await expect(evaluator.cleanupImages({ configPath: file, patchPath: patch, execute: true, signal: controller.signal }))
+    await expect(evaluator.cleanup({ configPath: file, patchPath: patch, execute: true, signal: controller.signal }))
       .rejects.toBe(controller.signal.reason);
-    expect(await evaluator.cleanupImages({ configPath: file, patchPath: patch })).toEqual(JSON.parse(output[0]!));
-    expect(await evaluator.cleanupImages({ configPath: file, patchPath: patch, execute: true }))
+    expect(await evaluator.cleanup({ configPath: file, patchPath: patch })).toEqual(JSON.parse(output[0]!));
+    expect(await evaluator.cleanup({ configPath: file, patchPath: patch, execute: true }))
       .toMatchObject({ preview: false, nodes: [{ nodeId: "local", daemonId: "fixture" }] });
     const executed = JSON.parse(await readFile(join(root, "request.json"), "utf8"));
     expect(executed.request).toEqual({ all: false, execute: true, configFingerprint: record.fingerprint });

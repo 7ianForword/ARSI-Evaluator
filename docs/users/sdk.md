@@ -2,7 +2,7 @@
 
 > English | [中文](./sdk.zh-CN.md)
 
-`Evaluator` provides a CLI and ESM SDK, requiring Node.js 24.22.1 or later 24.x. Import `Evaluator` from the package root and create an instance to call `run()`, `report()`, `doctor()`, or `cleanupImages()`. Low-level APIs such as `loadConfig`, `bootstrap`, and `runEngine` remain available.
+`Evaluator` provides a CLI and ESM SDK, requiring Node.js 24.22.1 or later 24.x. Import `Evaluator` from the package root and create an instance to call `run()`, `report()`, `doctor()`, or `cleanup()`. Low-level APIs such as `loadConfig`, `bootstrap`, and `runEngine` remain available.
 
 [User documentation](README.md) · [Installation](installation.md) · [Plugin development](../development/plugins.en.md)
 
@@ -99,10 +99,10 @@ Set local data paths in the experiment YAML: `benchmark.config.localPath` for re
 ```js
 const configPath = "/path/to/experiment.yaml";
 const { checks, network } = await evaluator.doctor({ configPath });
-const preview = await evaluator.cleanupImages({ configPath });
+const preview = await evaluator.cleanup({ configPath });
 ```
 
-`doctor()` returns individual configuration checks and a network report. To print the resolved configuration, use `arsi-evaluator inspect experiment.yaml`. `cleanupImages()` previews the image references owned by the supplied configuration. Pass `{ configPath, execute: true }` to perform cleanup and read the outcome for each image reference in `nodes`.
+`doctor()` returns individual configuration checks and a network report. To print the resolved configuration, use `arsi-evaluator inspect experiment.yaml`. `cleanup()` previews the image references owned by the supplied configuration. Pass `{ configPath, execute: true }` to perform cleanup and read the outcome for each image reference in `nodes`.
 
 ## Cancellation, Resume, and Reports
 

@@ -2,7 +2,7 @@
 
 > English | [中文](./sdk.zh-CN.md)
 
-`Evaluator` provides a CLI and ESM SDK, requiring Node.js 24.22.1 or later 24.x. Import `Evaluator` from the package root to load configuration, execute, report, and release resources in one call. Low-level APIs such as `loadConfig`, `bootstrap`, and `runEngine` remain available.
+`Evaluator` provides a CLI and ESM SDK, requiring Node.js 24.22.1 or later 24.x. Import `Evaluator` from the package root and create an instance to call `run()`, `report()`, `doctor()`, or `cleanupImages()`. Low-level APIs such as `loadConfig`, `bootstrap`, and `runEngine` remain available.
 
 [User documentation](README.md) · [Installation](installation.md) · [Plugin development](../development/plugins.en.md)
 
@@ -92,7 +92,17 @@ const result = await evaluator.run({
 
 The network YAML can reference `proxy: { https: "${DOWNLOAD_PROXY}" }`. When `networkConfigPath` is omitted, Evaluator checks `EVALUATOR_NETWORK_CONFIG` before using the default file in the user directory. An empty file uses built-in values, with supported environment overrides still applied. See [network configuration fields](reference/network.md).
 
-Set local data paths in the experiment YAML: `benchmark.config.localPath` for record datasets, or `benchmark.config.source: { kind: local, path: ./dataset }` for Harbor tasks. Paths are relative to the experiment YAML for both SDK and CLI. See [local datasets](local-datasets.md). The SDK does not expose `doctor()` or `inspect()`; use `arsi-evaluator doctor experiment.yaml` for diagnosis.
+Set local data paths in the experiment YAML: `benchmark.config.localPath` for record datasets, or `benchmark.config.source: { kind: local, path: ./dataset }` for Harbor tasks. Paths are relative to the experiment YAML for both SDK and CLI. See [local datasets](local-datasets.md).
+
+## Diagnostics and Image Cleanup
+
+```js
+const configPath = "/path/to/experiment.yaml";
+const { checks, network } = await evaluator.doctor({ configPath });
+const preview = await evaluator.cleanupImages({ configPath });
+```
+
+`doctor()` returns individual configuration checks and a network report. To print the resolved configuration, use `arsi-evaluator inspect experiment.yaml`. `cleanupImages()` previews the image references owned by the supplied configuration. Pass `{ configPath, execute: true }` to perform cleanup and read the outcome for each image reference in `nodes`.
 
 ## Cancellation, Resume, and Reports
 

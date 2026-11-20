@@ -40,8 +40,10 @@ export { redactDiagnostic } from "./core/errors/diagnostics.js";
 export type { PluginConfigValidator, PluginFactory, PluginFactoryContext, PluginRole, PreparedPlugin, RoleImplementations } from "./core/contracts/plugin.js";
 export { bootstrap, type BootstrappedComponents } from "./application/plugins/bootstrap.js";
 export type { EvaluatorRegistry } from "./application/plugins/registry.js";
-export { Evaluator, EvaluatorRunError, type EvaluationResult, type EvaluatorRunOptions } from "./application/evaluator.js";
-export { diagnoseExperiment, cleanupImages, type DoctorOptions, type DoctorReport, type ImageCleanupOptions } from "./application/maintenance.js";
+export {
+  Evaluator, EvaluatorRunError, type EvaluationResult, type EvaluatorRunOptions,
+  type DoctorOptions, type DoctorReport, type ImageCleanupOptions,
+} from "./application/evaluator.js";
 export type { ProgressEvent, ProgressListener, LiveProgress } from "./core/progress/progress.js";
 export type * from "./core/contracts/activity.js";
 export type * from "./core/contracts/components.js";

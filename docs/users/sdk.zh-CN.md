@@ -2,7 +2,7 @@
 
 > [English](./sdk.md) | 中文
 
-Evaluator 同时提供 CLI 和 ESM SDK，要求 Node.js 24.22.1 或更新的 24.x。其他项目从包根导入 `Evaluator`，一次调用完成配置加载、执行、报告和资源释放。现有 `loadConfig`、`bootstrap`、`runEngine` 等低层 API 继续保留。
+Evaluator 同时提供 CLI 和 ESM SDK，要求 Node.js 24.22.1 或更新的 24.x。从包根导入 `Evaluator`，创建实例后即可调用 `run()`、`report()`、`doctor()` 和 `cleanupImages()`。现有 `loadConfig`、`bootstrap`、`runEngine` 等低层 API 继续保留。
 
 [用户文档](README.zh-CN.md) · [安装指南](installation.zh-CN.md) · [插件开发](../development/plugins.md)
 
@@ -92,7 +92,17 @@ const result = await evaluator.run({
 
 网络 YAML 可写 `proxy: { https: "${DOWNLOAD_PROXY}" }`。省略 `networkConfigPath` 时，先读取 `EVALUATOR_NETWORK_CONFIG`，再使用用户目录中的默认网络文件。空文件使用程序默认值，受支持的环境变量仍可覆盖它们。完整字段见[网络配置字段](reference/network.zh-CN.md)。
 
-本地数据路径写在实验 YAML 中：记录型题库使用 `benchmark.config.localPath`；Harbor 系列使用 `benchmark.config.source: { kind: local, path: ./dataset }`。相对路径按实验 YAML 目录解析，SDK 和 CLI 行为相同；格式和限制见[本地数据集](local-datasets.zh-CN.md)。SDK 不公开 `doctor()` 或 `inspect()` 方法，需要诊断时运行 `arsi-evaluator doctor experiment.yaml`。
+本地数据路径写在实验 YAML 中：记录型题库使用 `benchmark.config.localPath`；Harbor 系列使用 `benchmark.config.source: { kind: local, path: ./dataset }`。相对路径按实验 YAML 目录解析，SDK 和 CLI 行为相同；格式和限制见[本地数据集](local-datasets.zh-CN.md)。
+
+## 诊断与镜像清理
+
+```js
+const configPath = "/path/to/experiment.yaml";
+const { checks, network } = await evaluator.doctor({ configPath });
+const preview = await evaluator.cleanupImages({ configPath });
+```
+
+`doctor()` 返回逐项配置检查结果和网络诊断报告。要打印解析后的配置，可运行 `arsi-evaluator inspect experiment.yaml`。`cleanupImages()` 默认预览当前配置拥有的镜像引用。传入 `{ configPath, execute: true }` 即可执行清理，并在返回结果的 `nodes` 中查看各镜像引用的处理结果。
 
 ## 取消、续跑与报告
 

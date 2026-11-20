@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { runCli } from "../../src/cli/main.js";
+import { cleanupImages } from "arsi-evaluator";
 
 test("cleanup loads only scheduler and environment, without dataset, Solver, model key or result allocation", async () => {
   const root = await mkdtemp(join(tmpdir(), "cleanup-cli-test-"));
@@ -32,6 +33,17 @@ export function apply(ctx) {
     expect(JSON.parse(output[0]!)).toMatchObject({ preview: true, nodes: [{ nodeId: "local" }] });
     const record = JSON.parse(await readFile(join(root, "request.json"), "utf8"));
     expect(record.request).toMatchObject({ all: false, execute: false, configFingerprint: record.fingerprint });
+    await expect(Reflect.apply(cleanupImages, undefined, [{ configPath: file, patchPath: patch, execute: "false" }]))
+      .rejects.toThrow("execute must be a boolean");
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled before cleanup"));
+    await expect(cleanupImages({ configPath: file, patchPath: patch, execute: true, signal: controller.signal }))
+      .rejects.toBe(controller.signal.reason);
+    expect(await cleanupImages({ configPath: file, patchPath: patch })).toEqual(JSON.parse(output[0]!));
+    expect(await cleanupImages({ configPath: file, patchPath: patch, execute: true }))
+      .toMatchObject({ preview: false, nodes: [{ nodeId: "local", daemonId: "fixture" }] });
+    const executed = JSON.parse(await readFile(join(root, "request.json"), "utf8"));
+    expect(executed.request).toEqual({ all: false, execute: true, configFingerprint: record.fingerprint });
     await expect(access(join(root, "results"))).rejects.toMatchObject({ code: "ENOENT" });
   } finally { await rm(root, { recursive: true, force: true }); }
 });

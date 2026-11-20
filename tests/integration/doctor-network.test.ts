@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { diagnoseExperiment } from "arsi-evaluator";
 import { runCli, parseArgs } from "../../src/cli/main.js";
 import { diagnoseNetwork } from "../../src/application/diagnostics/network.js";
 import { defaultNetworkConfigPath } from "../../src/config/network.js";
@@ -50,8 +51,29 @@ test("experiment doctor preserves configuration checks and uses the selected net
   expect(await runCli(["doctor", file, "--network", network], { out: text => out.push(text), error: text => errors.push(text) }), errors.join("\n")).toBe(0);
   expect(JSON.parse(out.at(-1)!)).toMatchObject({ checks: expect.arrayContaining([expect.objectContaining({ name: "configuration", status: "passed" })]),
     network: { configPath: resolve(network), status: "passed" } });
+  const options = { configPath: file, networkConfigPath: network, env: { TEST_KEY: "sdk-only-key" } };
+  await expect(diagnoseExperiment({ ...options, env: {} })).rejects.toThrow(/TEST_KEY/);
+  expect(await diagnoseExperiment(options)).toEqual(JSON.parse(out.at(-1)!));
   vi.mocked(diagnoseNetwork).mockResolvedValue([{ name: "cached", location: "host", target: "fixture", route: "direct", status: "not-checked", elapsedMs: 0, evidence: "cache" }]);
+  expect((await diagnoseExperiment(options)).network.status).toBe("incomplete");
   expect(await runCli(["doctor", file, "--network", network], { out: () => {}, error: () => {} })).toBe(1);
+});
+
+test("SDK doctor preserves cancellation and redacts configuration aliases on load failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sdk-doctor-invalid-")); roots.push(root);
+  const configPath = join(root, "experiment.yaml"), networkConfigPath = join(root, "network.yaml");
+  await writeFile(configPath, JSON.stringify({
+    benchmark: "gsm8k",
+    services: { default: { model: "fixture", base_url: "https://model.invalid/v1", api_key: "${CUSTOM_ALIAS}" } },
+  }));
+  await writeFile(networkConfigPath, "{}\n");
+  const value = "private-fixture-value";
+  const options = { configPath, networkConfigPath, patchPath: join(root, value + ".yaml"), env: { CUSTOM_ALIAS: value } };
+  const signal = AbortSignal.abort(new Error("doctor cancelled"));
+  await expect(diagnoseExperiment({ ...options, signal })).rejects.toBe(signal.reason);
+  const outcome = diagnoseExperiment(options);
+  await expect(outcome).rejects.toThrow(/\[redacted\]/);
+  await expect(outcome).rejects.not.toThrow(value);
 });
 
 test.each([

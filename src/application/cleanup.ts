@@ -7,6 +7,7 @@ import { fingerprintImageConfig } from "../core/policies/image-config.js";
 import { openPluginRegistry, type PluginRegistry } from "./plugins/open-registry.js";
 
 export type CleanupOptions = { file?: string; all: boolean; execute: boolean; patchPath?: string;
+  env?: NodeJS.ProcessEnv; networkConfigPath?: string;
   signal: AbortSignal; execution?: { config: LoadedConfig; registry: PluginRegistry }; onLoaded?: (config: LoadedConfig) => void };
 
 export async function cleanupImages(options: CleanupOptions): Promise<ImageCleanupSummary> {
@@ -20,9 +21,11 @@ export async function cleanupImages(options: CleanupOptions): Promise<ImageClean
   const registry = options.execution?.registry ?? await openPluginRegistry(options.patchPath);
   try {
     const file = resolve(options.file);
-    const config = options.execution?.config ?? await loadConfig(file, {}, process.env,
-      { registry, allowMissingAuth: true, ...(options.patchPath ? { patchPath: options.patchPath } : {}) });
+    const config = options.execution?.config ?? await loadConfig(file, {}, options.env ?? process.env,
+      { registry, allowMissingAuth: true, ...(options.patchPath ? { patchPath: options.patchPath } : {}),
+        ...(options.networkConfigPath ? { networkConfigPath: options.networkConfigPath } : {}) });
     options.onLoaded?.(config);
+    signal.throwIfAborted();
     const lookup = (role: string, name: string) => registry.ctx.evaluator.configTransport(role, name);
     const request: ImageCleanupRequest = { all: options.all, execute: options.execute,
       configFingerprint: fingerprintImageConfig(config.experiment as unknown as import("../core/contracts/task.js").JsonValue, lookup) };

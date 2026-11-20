@@ -247,6 +247,7 @@ services:
     base_url: ${CODEBUDDY_ENDPOINT}
     api: openai-completions
     api_key: ${CODEBUDDY_API_KEY}
+    contextWindow: 200000  # Set to the selected service's context capacity.
 benchmark:
   name: gsm8k
   solver:
@@ -264,7 +265,7 @@ output:
   directory: ./results/codebuddy
 ```
 
-- Set `base_url` to the API base, such as `https://api.openai.com/v1`. You can also select `api: openai-responses`. The solver uses `maxTokens` as the model output limit. Omit `contextWindow` and `retry`.
+- Set `base_url` to the API base, such as `https://api.openai.com/v1`. You can also select `api: openai-responses`. `services.<name>.contextWindow` sets the model's native `maxInputTokens`, which CodeBuddy uses to calculate when to compact. `maxTokens` sets the model output limit. Omit `retry`.
 - `solver.config.maxTurns` accepts a positive integer and maps to CodeBuddy's native `--max-turns`, limiting agentic turns per solve. When omitted, Evaluator leaves the CLI default unchanged. The turn limit and `run.solveTimeoutSeconds` apply independently; whichever is reached first ends the solve.
 - Native Windows exposes PowerShell. WSL and Docker expose Bash. Local commands run with the host process's permissions, so use local mode for trusted tasks. Docker commands run in the task container.
 - A workspace `.codebuddy/models.json` can override the selected endpoint. The solver reports an error before starting CodeBuddy when the file is present. For images and PDF `pages` attachments, declare `inputModalities: [text, image]`. Native PDF, task skills, and task MCP configuration are unsupported. Each attempt saves redacted events, trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
@@ -361,6 +362,8 @@ Specify existing installations with Solver settings such as `dshhome`, `dshprofi
 For Docker, DSH uses the pinned default (0.2.2-rc.1) when it satisfies the Bundle’s `harness.version`. Otherwise the Solver selects the highest compatible release from the configured npm registry. Use an explicit prerelease comparator to allow a release candidate. Local environments check the installed DSH version against the same range.
 
 Prefer `services.<name>.maxTokens` for output limits. AgentBundle also accepts Solver `maxTokens`, but setting both is an error. This page covers Evaluator configuration and execution; use the linked AgentBundle documentation for bundle creation, formats and installation.
+
+For DSH, `services.<name>.contextWindow` sets the selected model's native context capacity for compaction. On the built-in DeepSeek API-key route, an explicit context size supplies a local catalog entry for the selected model. Leave room for the output cap and the profile's compaction headroom (65,536 tokens by default). DSH's ordinary task loop has no native `maxTurns` setting. Use `run.solveTimeoutSeconds` to set a task deadline.
 
 ## Docker Preparation and Networking
 

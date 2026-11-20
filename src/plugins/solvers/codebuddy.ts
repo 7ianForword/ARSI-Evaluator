@@ -41,8 +41,8 @@ export class CodeBuddySolver implements Solver {
     if (model.api !== "openai-completions" && model.api !== "openai-responses") {
       throw new TypeError("codebuddy requires api: openai-completions or openai-responses on its selected service");
     }
-    if (model.contextWindow !== undefined || model.retry !== undefined) {
-      throw new TypeError("codebuddy does not support services.*.contextWindow or services.*.retry");
+    if (model.retry !== undefined) {
+      throw new TypeError("codebuddy does not support services.*.retry");
     }
     this.endpoint = apiBase(model.endpoint);
   }
@@ -94,7 +94,8 @@ export class CodeBuddySolver implements Solver {
         env: { NODE_USE_ENV_PROXY: "1" },
         inheritEnv: false,
         input: Buffer.from(JSON.stringify({
-          apiKey: auth.value, api: model.api, baseUrl, model: model.name, maxTokens: model.maxTokens, reasoningEffort: model.reasoningEffort, maxTurns, toolPolicy,
+          apiKey: auth.value, api: model.api, baseUrl, model: model.name,
+          maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort, maxTurns, toolPolicy,
           supportsImages: model.inputModalities?.includes("image") ?? false, prompt: input.prompt, token, media,
         }), "utf8"),
       }, signal);

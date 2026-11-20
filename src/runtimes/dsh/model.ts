@@ -6,6 +6,7 @@ export const DSH_AUTH_ENV = "ARSI_EVALUATOR_API_KEY";
 export const DSH_ENDPOINT_PROVIDER = "arsi-evaluator";
 
 export function dshModelPatch(model: ModelConfig): string {
+  const context = model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow };
   if (model.endpoint === null && (model.provider === "amazon-bedrock" || model.provider === "azure-openai")) {
     throw new AgentBundleError(
       "CONFIG_INVALID",
@@ -22,6 +23,15 @@ export function dshModelPatch(model: ModelConfig): string {
       { id: "llm-deepseek", config: {
         apiKeyEnv: DSH_AUTH_ENV,
         ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+        // Built-in catalog entries take precedence over defaultContextWindow.
+        ...(model.contextWindow === undefined ? {} : { models: [{
+          id: model.name, ...context,
+          // Preserve the pinned native Flash route's image and history capabilities.
+          ...(model.name === "deepseek-flash" ? {
+            inputModalities: ["text", "image"], systemPromptUpdate: "in-history", toolUpdate: "addition-only",
+          } : {}),
+          ...(model.inputModalities === undefined ? {} : { inputModalities: model.inputModalities.filter(kind => kind !== "pdf") }),
+        }] }),
         ...(model.reasoningEffort === undefined ? {} : { thinking: "enabled", reasoningEffort: model.reasoningEffort }),
       } },
     ]);
@@ -49,7 +59,7 @@ export function dshModelPatch(model: ModelConfig): string {
           ...(model.endpoint === null ? {} : { baseURL: model.endpoint }),
           ...(model.api === null ? {} : { api: model.api }),
           ...(model.reasoningEffort === undefined ? {} : { reasoning: model.reasoningEffort }),
-          models: [{ id: model.name, ...(model.inputModalities === undefined ? {} : { input: model.inputModalities.filter(kind => kind !== "pdf") }), ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+          models: [{ id: model.name, ...context, ...(model.inputModalities === undefined ? {} : { input: model.inputModalities.filter(kind => kind !== "pdf") }), ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
             ...(model.reasoningEffort === undefined ? {} : {
               reasoningEfforts: { [model.reasoningEffort]: model.reasoningEffort },
               compat: model.api === "anthropic-messages" ? { forceAdaptiveThinking: true }

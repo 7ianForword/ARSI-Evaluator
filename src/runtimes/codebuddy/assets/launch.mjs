@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { startModelRelay } from "./runtimes/shared/assets/model-relay.mjs";
 
 const [home, entry] = process.argv.slice(2);
-const { apiKey, api, baseUrl, model, maxTokens, reasoningEffort, maxTurns, supportsImages, prompt, token, media, toolPolicy = {} } = JSON.parse(readFileSync(0, "utf8"));
+const { apiKey, api, baseUrl, model, maxTokens, contextWindow, reasoningEffort, maxTurns, supportsImages, prompt, token, media, toolPolicy = {} } = JSON.parse(readFileSync(0, "utf8"));
 
 // The model loader in CodeBuddy 2.183.0 reads this file independently of --setting-sources.
 const projectModels = await lstat(join(process.cwd(), ".codebuddy", "models.json")).catch(error => {
@@ -26,6 +26,7 @@ try {
       id: model, name: model, vendor: "openai", api, apiKey: token,
       url: api === "openai-completions" ? relay.endpoint + "/chat/completions" : relay.endpoint,
       supportsToolCall: true, supportsImages,
+      ...(contextWindow === undefined ? {} : { maxInputTokens: contextWindow }),
       ...(maxTokens === undefined ? {} : { maxOutputTokens: maxTokens }),
     }],
     availableModels: [model],

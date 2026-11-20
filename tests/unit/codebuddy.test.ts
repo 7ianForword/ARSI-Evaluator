@@ -141,9 +141,8 @@ test("CodeBuddy accepts both OpenAI protocols and prepares without a key", async
   expect(() => new CodeBuddySolver({ ...binding, model: { ...binding.model, api: "openai-responses" } })).not.toThrow();
   expect(() => new CodeBuddySolver({ ...binding, model: { ...binding.model, api: "anthropic-messages" } })).toThrow(/openai-completions/u);
   expect(() => new CodeBuddySolver({ ...binding, model: { ...binding.model, endpoint: "https://service.test/v1/chat/completions" } })).toThrow(/base_url/u);
-  for (const fields of [{ contextWindow: 200 }, { retry: { maxAttempts: 2 } }]) {
-    expect(() => new CodeBuddySolver({ ...binding, model: { ...binding.model, ...fields } })).toThrow(/does not support/u);
-  }
+  expect(() => new CodeBuddySolver({ ...binding, model: { ...binding.model, contextWindow: 128000 } })).not.toThrow();
+  expect(() => new CodeBuddySolver({ ...binding, model: { ...binding.model, retry: { maxAttempts: 2 } } })).toThrow(/does not support/u);
   await expect(new CodeBuddySolver(binding).runtimeInstallation(AbortSignal.timeout(5000))).resolves.toMatchObject({ id: "codebuddy:2.183.0" });
 });
 

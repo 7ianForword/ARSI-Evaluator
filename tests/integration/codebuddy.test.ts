@@ -13,6 +13,7 @@ import { writeFixture } from "../fixtures/dataset-tasks.js";
 const secret = "fixture-codebuddy-upstream-key";
 const model = "deepseek-v4-flash";
 const maxTokens = 123;
+const contextWindow = 128000;
 
 async function modelFixture(docker: boolean) {
   const windows = process.platform === "win32" && !docker;
@@ -98,7 +99,7 @@ async function smoke(environment: "local" | "docker"): Promise<void> {
     });
     await writeFile(configPath, JSON.stringify({
       services: { selected: { model, base_url: fixture.endpoint, api: docker ? "openai-responses" : "openai-completions",
-        api_key: "${CODEBUDDY_FIXTURE_KEY}", maxTokens } },
+        api_key: "${CODEBUDDY_FIXTURE_KEY}", maxTokens, contextWindow } },
       benchmark: {
         name: docker ? "harbor" : "gpqa",
         config: docker ? { source: { kind: "local", path: "./dataset" } } : { localPath: "./gpqa.csv" },
@@ -124,7 +125,11 @@ async function smoke(environment: "local" | "docker"): Promise<void> {
     expect(fixture.requests[1]?.toolOutput).toContain("FILE_AND_KEY_OK");
     if (!docker) expect(fixture.requests[0]?.input).toContain("计算");
     const agent = join(result.runDirectory, "tasks", safeTaskKey(attempt.key.taskId), "attempts", attempt.key.attemptId, "agent");
-    for (const filename of ["session.jsonl", "trajectory.jsonl", "stderr.log"]) {
+    const nativeLog = await readFile(join(agent, "session.jsonl"), "utf8");
+    expect(nativeLog).not.toContain(secret);
+    const nativeResult = nativeLog.trim().split("\n").map(line => JSON.parse(line)).find(event => event.type === "result");
+    expect(Object.values(nativeResult?.modelUsage ?? {})).toContainEqual(expect.objectContaining({ contextWindow, maxOutputTokens: maxTokens }));
+    for (const filename of ["trajectory.jsonl", "stderr.log"]) {
       expect(await readFile(join(agent, filename), "utf8")).not.toContain(secret);
     }
   } finally {

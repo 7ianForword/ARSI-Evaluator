@@ -36,12 +36,13 @@ export async function inspectExperiment(options: InspectionOptions) {
   };
 }
 
-export async function diagnoseExperiment(options: InspectionOptions, signal: AbortSignal, log: (text: string) => void) {
+export async function diagnoseExperiment(options: InspectionOptions & { env?: NodeJS.ProcessEnv }, signal: AbortSignal, log: (text: string) => void) {
   const registry = await openPluginRegistry(options.patchPath);
   try {
-    const config = await loadConfig(resolve(options.file), options.overrides, process.env, { registry,
+    const config = await loadConfig(resolve(options.file), options.overrides, options.env ?? process.env, { registry,
       ...(options.networkConfigPath === undefined ? {} : { networkConfigPath: options.networkConfigPath }) });
     options.onLoaded?.(config);
+    signal.throwIfAborted();
     await createBenchmark(registry, config, dirname(resolve(options.file)));
     const checks = await diagnose(config, options.file, signal);
     const network = await diagnoseDownloads({ config, configPath: options.file,

@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { lockedCliPatch } from "../../runtimes/shared/locked-cli-patch.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
@@ -8,20 +9,15 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
-import { expectPositiveInteger, expectRecord } from "../../core/validation/input.js";
-import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { consumeCodeBuddy } from "../../runtimes/codebuddy/protocol.js";
 import { CODEBUDDY_ENTRY, CODEBUDDY_VERSION, codeBuddyRuntimeInstallation } from "../../runtimes/codebuddy/runtime.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 
-export type CodeBuddyConfig = SolverToolPolicy & { maxTurns?: number };
+export type CodeBuddyConfig = SolverToolPolicy & AgentLimits;
 
 export function parseCodeBuddyConfig(value: unknown): CodeBuddyConfig {
-  const config = expectRecord(value, "codebuddy config");
-  return {
-    ...parseSolverToolPolicy(config, "codebuddy config", ["maxTurns"]),
-    ...(config.maxTurns === undefined ? {} : { maxTurns: expectPositiveInteger(config.maxTurns, "codebuddy config.maxTurns") }),
-  };
+  return parseAgentOptions(value, "codebuddy");
 }
 
 function apiBase(endpoint: string | null): string {
@@ -34,7 +30,7 @@ function apiBase(endpoint: string | null): string {
 }
 
 export class CodeBuddySolver implements Solver {
-  readonly inputModalities = ["text", "image"] as const;
+  readonly inputModalities = ["text", "image", "pdf"] as const;
   private readonly endpoint: string;
 
   constructor(private readonly binding: ServiceBinding, private readonly config: CodeBuddyConfig = {}) {
@@ -69,9 +65,6 @@ export class CodeBuddySolver implements Solver {
     const { maxTurns, ...toolPolicy } = sessionToolPolicy("codebuddy", this.config, session);
     if (!auth.value.trim() || /[\r\n\0]/u.test(auth.value)) {
       throw new EvaluatorError("MODEL_AUTH_FAILED", "codebuddy requires a non-empty, single-line API key on its selected service");
-    }
-    if (input.attachments?.some(attachment => attachment.kind === "pdf" && attachment.mode === "native")) {
-      throw new EvaluatorError("BENCHMARK_UNSUPPORTED", "codebuddy requires PDF attachments in pages mode");
     }
     requireInputModalities(input, model.inputModalities ?? ["text"]);
     const runtime = session.runtime;

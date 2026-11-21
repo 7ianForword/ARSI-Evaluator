@@ -161,7 +161,17 @@ export async function acpRun({ child, exited, input, options }) {
   reader.catch(() => {});
   try {
     const initialized = await send("initialize", { protocolVersion: 1, clientCapabilities: {} });
-    if (input.media?.length && !initialized.agentCapabilities?.promptCapabilities?.image) throw Error("Native ACP did not advertise image input");
+    const capabilities = initialized.agentCapabilities?.promptCapabilities;
+    const attachments = (input.media ?? []).map(media => {
+      if (media.mediaType === "application/pdf") {
+        if (!capabilities?.embeddedContext) throw Error("Native ACP did not advertise embedded resource input for PDFs");
+        return { type: "resource", resource: {
+          uri: "file:///attachments/" + encodeURIComponent(media.name), mimeType: media.mediaType, blob: media.data,
+        } };
+      }
+      if (!capabilities?.image) throw Error("Native ACP did not advertise image input");
+      return { type: "image", mimeType: media.mediaType, data: media.data };
+    });
     const transports = initialized.agentCapabilities?.mcpCapabilities ?? {};
     const mcpServers = [];
     for (const { name, transport, url } of options.mcpServers ?? []) {
@@ -177,7 +187,7 @@ export async function acpRun({ child, exited, input, options }) {
     if (options.modeId) await send("session/set_mode", { sessionId, modeId: options.modeId });
     await options.beforePrompt?.(send, sessionId);
     const result = await send("session/prompt", { sessionId, prompt: [
-      { type: "text", text: input.prompt }, ...(input.media ?? []).map(media => ({ type: "image", mimeType: media.mediaType, data: media.data })),
+      { type: "text", text: input.prompt }, ...attachments,
     ] });
     if (result.stopReason !== "end_turn") throw Error(`Native ACP stopped: ${result.stopReason}`);
     if (!finalText.trim()) throw Error("Native ACP completed without a final answer");

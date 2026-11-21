@@ -8,7 +8,7 @@ import { stageAttachments } from "./stage-attachments.mjs";
 
 const [home, entry] = process.argv.slice(2);
 const input = JSON.parse(readFileSync(0, "utf8"));
-const { apiKey, api, baseUrl, model, inputModalities, reasoningEffort, prompt, token, media = [], toolPolicy = {} } = input;
+const { apiKey, api, baseUrl, model, inputModalities, maxTokens, contextWindow, reasoningEffort, prompt, token, media = [], toolPolicy = {} } = input;
 const settings = join(home, ".zcode", "cli");
 await mkdir(home, { mode: 0o700 });
 let relay;
@@ -33,11 +33,17 @@ try {
         },
       }] },
       modelConfigRules: {
-        providerModelRules: inputModalities === undefined ? [] : [{
-          providerId, modelId: model, config: { properties: { inputFormat: {
-            supportsImage: inputModalities.includes("image"),
-            supportsPdf: inputModalities.includes("pdf"),
-          } } },
+        providerModelRules: inputModalities === undefined && maxTokens === undefined && contextWindow === undefined ? [] : [{
+          providerId, modelId: model, config: {
+            ...(maxTokens === undefined ? {} : { optionSpecs: { maxOutputTokens: { max: maxTokens } } }),
+            properties: {
+              ...(contextWindow === undefined ? {} : { contextWindow }),
+              ...(inputModalities === undefined ? {} : { inputFormat: {
+                supportsImage: inputModalities.includes("image"),
+                supportsPdf: inputModalities.includes("pdf"),
+              } }),
+            },
+          },
         }],
         manualProviderModelRules: [],
       },

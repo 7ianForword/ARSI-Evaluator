@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -7,13 +8,13 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
-import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { consumeClaudeCode } from "../../runtimes/claudecode/protocol.js";
 import { CLAUDE_CODE_ENTRY, CLAUDE_CODE_VERSION, claudeCodeRuntimeInstallation } from "../../runtimes/claudecode/runtime.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 
-export function parseClaudeCodeConfig(value: unknown): SolverToolPolicy {
-  return parseSolverToolPolicy(value, "claudecode config");
+export function parseClaudeCodeConfig(value: unknown): SolverToolPolicy & AgentLimits {
+  return parseAgentOptions(value, "claudecode");
 }
 
 function messagesEndpoint(endpoint: string | null): string {
@@ -30,7 +31,7 @@ export class ClaudeCodeSolver implements Solver {
   readonly inputModalities = ["text", "image", "pdf"] as const;
   private readonly endpoint: string;
 
-  constructor(private readonly binding: ServiceBinding, private readonly policy: SolverToolPolicy = {}) {
+  constructor(private readonly binding: ServiceBinding, private readonly policy: SolverToolPolicy & Pick<AgentLimits, "maxTurns"> = {}) {
     const { model } = binding;
     if (model.api !== "anthropic-messages") throw new TypeError("claudecode requires api: anthropic-messages on its selected service");
     this.endpoint = messagesEndpoint(model.endpoint);
@@ -48,11 +49,13 @@ export class ClaudeCodeSolver implements Solver {
 
   async provenance(signal: AbortSignal): Promise<SolverProvenance> {
     signal.throwIfAborted();
-    return { ...toolPolicyProvenance(this.policy, "claudecode-native"), claudeCodeVersion: CLAUDE_CODE_VERSION };
+    const { maxTurns, ...tools } = this.policy;
+    return { ...toolPolicyProvenance(tools, "claudecode-native"), claudeCodeVersion: CLAUDE_CODE_VERSION,
+      ...(maxTurns === undefined ? {} : { maxTurns: String(maxTurns) }) };
   }
 
   async solve(input: PublicTask, session: EnvironmentSession, context: AttemptContext): Promise<SolveResult> {
-    const policy = sessionToolPolicy("claudecode", this.policy, session);
+    const { maxTurns, ...policy } = sessionToolPolicy("claudecode", this.policy, session);
     const { signal } = context;
     signal.throwIfAborted();
     const { model, auth } = this.binding;
@@ -86,6 +89,7 @@ export class ClaudeCodeSolver implements Solver {
         executable: local ? process.execPath : "node",
         args: [path(runtime.root, "launch.mjs"), home, path(runtime.root, CLAUDE_CODE_ENTRY),
           "--print", "--verbose", "--output-format", "stream-json", "--no-session-persistence",
+          ...(maxTurns === undefined ? [] : ["--max-turns", String(maxTurns)]),
           "--permission-mode", "bypassPermissions",
           ...(none ? ["--tools", ""] : []),
           ...(policy.skills === "disabled" ? ["--disable-slash-commands"] : []),

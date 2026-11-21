@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -5,23 +6,18 @@ import type { EnvironmentSession, RuntimeRequirement } from "../../core/contract
 import type { ServiceBinding } from "../../core/contracts/plugin.js";
 import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
-import type { PublicTask } from "../../core/contracts/task.js";
+import type { InputModality, PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
-import { expectPositiveInteger, expectRecord } from "../../core/validation/input.js";
-import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 import { consumeNativeCode } from "../../runtimes/shared/native-code-protocol.js";
 import { nativeCodeInstallation, nativeCodeVersions, type NativeCodeName } from "../../runtimes/shared/native-code-runtime.js";
 import { lockedCliPatch } from "../../runtimes/shared/locked-cli-patch.js";
 
-export type NativeCodeConfig = SolverToolPolicy & { maxTurns?: number };
+export type NativeCodeConfig = SolverToolPolicy & AgentLimits;
 
 export function parseNativeCodeConfig(name: NativeCodeName, value: unknown): NativeCodeConfig {
-  const config = expectRecord(value, `${name} config`);
-  return {
-    ...parseSolverToolPolicy(config, `${name} config`, ["maxTurns"]),
-    ...(config.maxTurns === undefined ? {} : { maxTurns: expectPositiveInteger(config.maxTurns, `${name} config.maxTurns`) }),
-  };
+  return parseAgentOptions(value, name);
 }
 
 function apiBase(endpoint: string | null): string {
@@ -35,7 +31,10 @@ function apiBase(endpoint: string | null): string {
 
 /** Four independent native CLIs share only Evaluator's process/attachment plumbing. */
 export class NativeCodeSolver implements Solver {
-  readonly inputModalities = ["text", "image"] as const;
+  get inputModalities(): readonly InputModality[] {
+    const pdf = this.name === "opencode" || (this.name === "qwencode" && this.binding.model.api !== "openai-responses");
+    return pdf ? ["text", "image", "pdf"] : ["text", "image"];
+  }
   private readonly endpoint: string;
 
   constructor(private readonly name: NativeCodeName, private readonly binding: ServiceBinding, private readonly config: NativeCodeConfig = {}) {
@@ -67,8 +66,8 @@ export class NativeCodeSolver implements Solver {
     context.signal.throwIfAborted();
     const { model, auth } = this.binding;
     if (!auth.value.trim() || /[\r\n\0]/u.test(auth.value)) throw new EvaluatorError("MODEL_AUTH_FAILED", `${this.name} requires a non-empty, single-line API key`);
-    if (input.attachments?.some(attachment => attachment.kind === "pdf" && attachment.mode === "native")) {
-      throw new EvaluatorError("BENCHMARK_UNSUPPORTED", `${this.name} requires PDF attachments in pages mode`);
+    if (!this.inputModalities.includes("pdf") && input.attachments?.some(attachment => attachment.kind === "pdf" && attachment.mode === "native")) {
+      throw new EvaluatorError("BENCHMARK_UNSUPPORTED", `${this.name} with ${model.api} requires PDF attachments in pages mode`);
     }
     requireInputModalities(input, model.inputModalities ?? ["text"]);
     const runtime = session.runtime;
@@ -87,7 +86,8 @@ export class NativeCodeSolver implements Solver {
         input: Buffer.from(JSON.stringify({ apiKey: auth.value, api: model.api, baseUrl, model: model.name,
           maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort,
           toolPolicy: sessionToolPolicy(this.name, this.config, session), outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers, maxTurns: this.config.maxTurns, prompt: input.prompt,
-          supportsImages: model.inputModalities?.includes("image") ?? false, token, media }), "utf8"),
+          supportsImages: model.inputModalities?.includes("image") ?? false,
+          supportsPdf: this.inputModalities.includes("pdf") && (model.inputModalities?.includes("pdf") ?? false), token, media }), "utf8"),
       }, context.signal);
       return await consumeNativeCode(this.name, handle, context, [auth.value, token]);
     } finally {

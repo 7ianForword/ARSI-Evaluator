@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -7,13 +8,13 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
-import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 import { consumeZCode } from "../../runtimes/zcode/protocol.js";
 import { readZCodeSourceLock, ZCODE_ENTRY, zcodeRuntimeInstallation } from "../../runtimes/zcode/runtime.js";
 
-export function parseZCodeConfig(value: unknown): SolverToolPolicy {
-  const policy = parseSolverToolPolicy(value, "zcode config");
+export function parseZCodeConfig(value: unknown): SolverToolPolicy & AgentLimits {
+  const policy = parseAgentOptions(value, "zcode");
   if (policy.webSearch === "enabled" && policy.mcp === "disabled") {
     unsupportedToolPolicy("zcode", "webSearch: enabled cannot be combined with mcp: disabled because the custom model route has no native WebSearch and supplementary search requires MCP.");
   }
@@ -38,8 +39,8 @@ export class ZCodeSolver implements Solver {
     if (model.api === null || !["openai-completions", "openai-responses", "anthropic-messages"].includes(model.api)) {
       throw new TypeError("zcode requires api: openai-completions, openai-responses or anthropic-messages");
     }
-    if (model.maxTokens !== undefined || model.contextWindow !== undefined || model.retry !== undefined) {
-      throw new TypeError("zcode does not support services.*.maxTokens, services.*.contextWindow or services.*.retry");
+    if (model.retry !== undefined) {
+      throw new TypeError("zcode does not support services.*.retry");
     }
     this.endpoint = apiBase(model.endpoint);
   }
@@ -83,7 +84,7 @@ export class ZCodeSolver implements Solver {
         inheritEnv: false,
         input: Buffer.from(JSON.stringify({
           outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers,
-          apiKey: auth.value, api: model.api, baseUrl, model: model.name, inputModalities: model.inputModalities, reasoningEffort: model.reasoningEffort,
+          apiKey: auth.value, api: model.api, baseUrl, model: model.name, inputModalities: model.inputModalities, maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort,
           prompt: input.prompt, token, media, toolPolicy: sessionToolPolicy("zcode", this.policy, session),
         }), "utf8"),
       }, signal);

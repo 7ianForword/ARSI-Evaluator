@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { loadAttachments } from "../../runtimes/multimodal/input.js";
 import type { ErrorCode } from "../../core/errors/registry.js";
 import { join, posix } from "node:path";
@@ -18,7 +19,7 @@ import { projectRunnerInput } from "../../runtimes/pi/protocol.js";
 import { consumePiRunner, PiRunnerError } from "../../runtimes/pi/process.js";
 import { parseShellToolPolicy, type ShellToolPolicy } from "../../runtimes/pi/tool-policy.js";
 import { expectNonEmptyString, expectRecord, rejectUnknown } from "../../core/validation/input.js";
-import { sessionToolPolicy, parseSolverToolPolicy, parseWebToolNames, toolPolicyProvenance, type SolverToolPolicy, type WebToolNames } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, parseWebToolNames, toolPolicyProvenance, type SolverToolPolicy, type WebToolNames } from "../../core/validation/solver-tool-policy.js";
 
 export class SimpleAgentError extends Error {
   constructor(
@@ -31,7 +32,7 @@ export class SimpleAgentError extends Error {
   }
 }
 
-export type SimpleAgentConfig = SolverToolPolicy & { bundle?: PiBundleOptions & WebToolNames; toolPolicy?: ShellToolPolicy };
+export type SimpleAgentConfig = SolverToolPolicy & AgentLimits & { bundle?: PiBundleOptions & WebToolNames; toolPolicy?: ShellToolPolicy };
 
 /**
  * Parse the simpleagent solver config. `bundle` is optional; without it the
@@ -40,7 +41,7 @@ export type SimpleAgentConfig = SolverToolPolicy & { bundle?: PiBundleOptions & 
  */
 export function parseSimpleAgentConfig(value: unknown): SimpleAgentConfig {
   const config = expectRecord(value, "simpleagent");
-  const policy = parseSolverToolPolicy(config, "simpleagent", ["bundle", "toolPolicy"]);
+  const policy = parseAgentOptions(config, "simpleagent", ["bundle", "toolPolicy"]);
   const options = config.toolPolicy === undefined ? policy : {
     ...policy, toolPolicy: parseShellToolPolicy(config.toolPolicy, "simpleagent.toolPolicy"),
   };

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 
 await launchCodeCli({
   entry: "node_modules/opencode-ai/bin/opencode.exe", native: true, enforceMaxTurns: true,
-  async configure({ executable, servers, endpoint, env, api, model, token, maxTokens, contextWindow, maxTurns, supportsImages, toolPolicy }) {
+  async configure({ executable, servers, endpoint, env, api, model, token, maxTokens, contextWindow, maxTurns, supportsImages, supportsPdf, toolPolicy }) {
     const permission = toolPolicy.tools === "none" ? { "*": "deny" } : { "*": "allow",
       ...(toolPolicy.subagent === "disabled" ? { task: "deny" } : {}),
       ...(toolPolicy.skills === "disabled" ? { skill: "deny" } : {}),
@@ -12,9 +12,9 @@ await launchCodeCli({
     const npm = api === "anthropic-messages" ? "@ai-sdk/anthropic" : api === "openai-responses" ? "@ai-sdk/openai" : "@ai-sdk/openai-compatible";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model: `evaluator/${model}`, small_model: `evaluator/${model}`,
       provider: { evaluator: { npm, options: { apiKey: token, baseURL: endpoint }, models: { [model]: {
-        id: model, name: model, attachment: supportsImages, tool_call: true,
+        id: model, name: model, attachment: Boolean(supportsImages || supportsPdf), tool_call: true,
         ...(maxTokens === undefined && contextWindow === undefined ? {} : { limit: { context: contextWindow ?? 200000, output: maxTokens ?? 32000 } }),
-        modalities: { input: supportsImages ? ["text", "image"] : ["text"], output: ["text"] },
+        modalities: { input: ["text", ...(supportsImages ? ["image"] : []), ...(supportsPdf ? ["pdf"] : [])], output: ["text"] },
       } } } },
       agent: { title: { disable: true }, build: { permission, ...(maxTurns === undefined ? {} : { steps: maxTurns }) } },
       permission, share: "disabled", autoupdate: false, snapshot: false,

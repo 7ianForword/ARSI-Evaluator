@@ -30,7 +30,9 @@ try {
     models: [{
       id: model, name: model, vendor: "openai", api, apiKey: token,
       url: api === "openai-completions" ? relay.endpoint + "/chat/completions" : relay.endpoint,
-      supportsToolCall: true, supportsImages,
+        supportsToolCall: true,
+        // The Chat adapter uses this flag for both image and document blocks.
+        supportsImages: supportsImages || media.some(item => item.mediaType === "application/pdf"),
       ...(contextWindow === undefined ? {} : { maxInputTokens: contextWindow }),
       ...(maxTokens === undefined ? {} : { maxOutputTokens: maxTokens }),
     }],
@@ -78,7 +80,8 @@ try {
   process.once("SIGTERM", terminate);
   try {
     const content = [{ type: "text", text: prompt }, ...media.map(({ mediaType, data }) => ({
-      type: "image", source: { type: "base64", media_type: mediaType, data },
+      type: mediaType === "application/pdf" ? "document" : "image",
+      source: { type: "base64", media_type: mediaType, data },
     }))];
     child.stdin.end(JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n", "utf8");
     process.exitCode = await exited;

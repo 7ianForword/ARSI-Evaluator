@@ -6,9 +6,9 @@ import { launchCodeCli, acpRun } from "./runtimes/shared/assets/native-code-laun
 await launchCodeCli({
   entry: "node_modules/@qwen-code/qwen-code/cli-entry.js",
   enforceMaxTurns: true,
-  async configure({ home, endpoint, env, api, model, token, supportsImages, maxTokens, contextWindow, reasoningEffort, maxTurns, toolPolicy, servers }) {
+  async configure({ home, endpoint, env, api, model, token, supportsImages, supportsPdf, maxTokens, contextWindow, reasoningEffort, maxTurns, toolPolicy, servers }) {
     const protocol = api === "anthropic-messages" ? "anthropic" : "openai";
-    const generationConfig = { modalities: { image: supportsImages },
+    const generationConfig = { modalities: { image: supportsImages, ...(supportsPdf ? { pdf: true } : {}) },
       ...(contextWindow === undefined ? {} : { contextWindowSize: contextWindow }),
       ...(maxTokens === undefined ? {} : { samplingParams: { max_tokens: maxTokens } }),
       ...(reasoningEffort === undefined ? {} : { reasoning: { effort: reasoningEffort } }) };

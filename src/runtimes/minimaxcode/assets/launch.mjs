@@ -8,6 +8,7 @@ await launchCodeCli({
   stageImages: true,
   async configure({ home, endpoint, env, api, model, token, maxTokens, contextWindow, reasoningEffort, maxTurns, supportsImages, prompt, files, toolPolicy, servers }) {
     env.EVALUATOR_DISABLE_MCP = toolPolicy.mcp === "disabled" ? "1" : "0";
+    if (maxTurns !== undefined) env.MINIMAX_EVALUATOR_MAX_TURNS = String(maxTurns);
     env.MINIMAX_DATA_DIR = join(home, "minimax");
     await mkdir(env.MINIMAX_DATA_DIR, { recursive: true });
     if (servers.length) await writeFile(join(env.MINIMAX_DATA_DIR, "mcp.json"), JSON.stringify(nativeMcpConfig(servers)), { mode: 0o600 });

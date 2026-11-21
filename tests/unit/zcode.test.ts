@@ -97,6 +97,6 @@ test("ZCode validates service settings without requiring credentials during prep
   expect(parseZCodeConfig({})).toEqual({});
   expect(() => parseZCodeConfig({ mode: "plan" })).toThrow(/unknown field/u);
   expect(() => new ZCodeSolver({ ...binding, model: { ...binding.model, api: "google-generative-ai" } })).toThrow(/requires api/u);
-  expect(() => new ZCodeSolver({ ...binding, model: { ...binding.model, contextWindow: 10 } })).toThrow(/contextWindow/u);
+  expect(() => new ZCodeSolver({ ...binding, model: { ...binding.model, contextWindow: 10 } })).not.toThrow();
   expect(await new ZCodeSolver(binding).runtimeInstallation(new AbortController().signal)).toMatchObject({ cacheName: "zcode-0.17.1" });
 });

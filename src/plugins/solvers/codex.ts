@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -9,16 +10,16 @@ import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
 import { expectRecord } from "../../core/validation/input.js";
 import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
-import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { consumeCodex } from "../../runtimes/codex/protocol.js";
 import { CODEX_ENTRY, CODEX_VERSION, codexRuntimeInstallation } from "../../runtimes/codex/runtime.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 
-type CodexConfig = SolverToolPolicy & { shellTool?: "disabled" };
+type CodexConfig = SolverToolPolicy & AgentLimits & { shellTool?: "disabled" };
 
 export function parseCodexConfig(value: unknown): CodexConfig {
   const { shellTool, ...config } = expectRecord(value, "codex config");
-  const policy = parseSolverToolPolicy(config, "codex config");
+  const policy = parseAgentOptions(config, "codex");
   if (shellTool !== undefined && shellTool !== "default" && shellTool !== "disabled") {
     throw new TypeError("codex config.shellTool must be default or disabled");
   }
@@ -103,7 +104,7 @@ export class CodexSolver implements Solver {
       'model_providers.arsi-evaluator.env_key="EVALUATOR_CODEX_API_KEY"',
       'model_providers.arsi-evaluator.wire_api="responses"',
       ...(model.reasoningEffort === undefined ? [] : [`model_reasoning_effort=${JSON.stringify(model.reasoningEffort)}`]),
-      ...(model.contextWindow === undefined ? [] : [`model_auto_compact_token_limit=${model.contextWindow}`]),
+      ...(model.contextWindow === undefined ? [] : [`model_context_window=${model.contextWindow}`, `model_auto_compact_token_limit=${model.contextWindow}`]),
     ];
     const media = await loadAttachments(input, session, context);
     try {

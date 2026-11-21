@@ -207,17 +207,8 @@ async function inputFromStdin(): Promise<RunnerInput> {
   }
 }
 
-/** Reserve headroom the summarizer needs to write a compaction summary. */
-export const COMPACTION_RESERVE_TOKENS = 16_384;
-
-/**
- * The context budget controls when the session compacts older history instead of failing on
- * provider-side truncation. The registered window adds the summarizer reserve
- * so compaction triggers exactly at the configured threshold.
- */
-export function contextWindowFor(contextBudget: number | undefined): number {
-  return (contextBudget ?? 128_000) + COMPACTION_RESERVE_TOKENS;
-}
+// Preserve the existing fallback for custom models without catalog metadata.
+const DEFAULT_CONTEXT_WINDOW = 128_000 + 16_384;
 
 function serviceStream(model: RunnerInput["model"], api: string): ProviderStreams["streamSimple"] | undefined {
   const useProviderBudget = api === "openai-completions" && model.maxTokens === undefined;
@@ -262,7 +253,7 @@ export async function modelFor(input: RunnerInput, runtime: ModelRuntime) {
           }),
           input: (input.model.inputModalities ?? registered?.input ?? ["text"]).filter((kind): kind is "text" | "image" => kind !== "pdf"),
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: contextWindowFor(input.model.contextWindow ?? input.model.maxTokens),
+          contextWindow: input.model.contextWindow ?? registered?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
           maxTokens,
         },
       ],
@@ -275,10 +266,11 @@ export async function modelFor(input: RunnerInput, runtime: ModelRuntime) {
   await runtime.setRuntimeApiKey(providerId, input.auth.value);
   const model = runtime.getModel(providerId, input.model.name);
   if (!model) throw new RunnerFailure("MODEL_REQUEST_INVALID", `model ${providerId}/${input.model.name} is not available`);
-  if (input.model.maxTokens === undefined) return { ...model, ...(input.model.inputModalities === undefined ? {} : { input: input.model.inputModalities.filter((kind): kind is "text" | "image" => kind !== "pdf") }),
-    ...(input.model.contextWindow === undefined ? {} : { contextWindow: contextWindowFor(input.model.contextWindow) }),
-    maxTokens: outputLimitFor(defaults, input.model.name, input.model.provider, undefined, model.maxTokens) };
-  return { ...model, ...(input.model.inputModalities === undefined ? {} : { input: input.model.inputModalities.filter((kind): kind is "text" | "image" => kind !== "pdf") }), maxTokens: input.model.maxTokens, contextWindow: contextWindowFor(input.model.contextWindow ?? input.model.maxTokens) };
+  return {
+    ...model, maxTokens,
+    ...(input.model.inputModalities === undefined ? {} : { input: input.model.inputModalities.filter((kind): kind is "text" | "image" => kind !== "pdf") }),
+    ...(input.model.contextWindow === undefined ? {} : { contextWindow: input.model.contextWindow }),
+  };
 }
 
 function assistantMessages(messages: unknown[]): AssistantMessage[] {
@@ -400,7 +392,7 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
   const runtimeSettings = {
       // Long-horizon solves outgrow small context windows; compaction
       // summarizes older history once the context passes the configured
-      // maxTokens threshold instead of failing on provider truncation.
+      // context window instead of failing on provider truncation.
       // reserveTokens/keepRecentTokens keep the SDK defaults (16k/20k).
       compaction: { enabled: true },
       // Transient provider failures (stream drops, connection errors, 429/5xx)

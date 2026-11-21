@@ -52,6 +52,47 @@ local 中的文件和 Shell 操作使用当前操作系统用户的权限，可�
 网页开关控制模型可调用的网页工具。保留 Bash 时，命令能否联网由求解环境决定。MMLU-Pro 可在 Docker 中设置 `benchmark.config.solveNetwork: model-api`，让每个求解容器只访问模型 API。可直接使用 [MMLU-Pro Playbook](../../playbook/mmlu-pro/mmlu-pro-simpleagent.yaml)。
 
 
+## 生成限额与附件
+
+在 `benchmark.solver.config` 中填写正整数。`maxTokens` 限制一次模型回复的输出 token 数。`maxTurns` 限制主 Agent 在一次求解中的执行轮数，各 Harness 按自己的循环计数。`contextWindow` 设置 Harness 用于自动压缩的上下文容量。Harness 可以提前压缩，为下一次回复和摘要预留空间。
+
+Solver 的 `maxTokens` 和 `contextWindow` 优先于当前服务的同名字段，省略则沿用服务配置。两处都省略时使用当前 Harness 和模型的默认配置。填写不支持的字段会报告 Harness 和字段名。AgentBundle 先读取 Bundle 确定实际 Harness，再检查限额。
+
+```yaml
+benchmark:
+  solver:
+    name: claudecode
+    config:
+      maxTokens: 8192
+      maxTurns: 12
+      contextWindow: 200000
+```
+
+下表记录锁定版本的 Docker 行为验收。通过表示模型端点收到指定输出上限或附件字节、主 Agent 在指定轮数停下，或小窗口实际压缩了历史。原生不支持表示当前 Harness 或 Bundle 入口拒绝该配置。本轮覆盖全部表格项。
+
+| Solver / Harness | `maxTokens` | `maxTurns` | `contextWindow` 自动压缩 | 图片 | PDF 页图 | 原始 PDF |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex | 原生不支持 | 原生不支持 | 通过 | 通过 | 通过 | 原生不支持 |
+| TRAE CLI | 原生不支持 | 原生不支持 | 通过 | 通过 | 通过 | 原生不支持 |
+| Claude Code | 通过 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| CodeBuddy | 通过 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| Qwen Code | 通过 | 通过 | 通过 | 通过 | 通过 | 通过（Chat Completions、Messages）；Responses 原生不支持 |
+| Kimi Code | 通过 | 通过 | 通过 | 通过 | 通过 | 原生不支持 |
+| MiniMax Code | 通过 | 通过 | 通过 | 通过 | 通过 | 原生不支持 |
+| ZCode | 通过 | 原生不支持 | 通过 | 通过 | 通过 | 通过 |
+| OpenCode | 通过 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| SimpleAgent | 通过 | 原生不支持 | 通过 | 通过 | 通过 | 原生不支持 |
+| DSH (AgentBundle) | 通过 | 原生不支持 | 通过 | 通过 | 通过 | 原生不支持 |
+| Pi (AgentBundle) | 通过 | 原生不支持 | 通过 | 通过 | 通过 | 原生不支持 |
+| JiuwenSwarm (AgentBundle) | 通过 | 通过 | 通过 | 通过 | 通过 | 原生不支持 |
+| DeepAgents (AgentBundle) | 原生不支持 | 原生不支持 | 原生不支持 | 通过 | 通过 | 通过 |
+
+MiniMax Code 0.7.8 的安装补丁在主 Agent 发起模型请求前检查 `maxTurns`。Docker 中分别设置 1 和 2 轮，200,000 和 36,000 token 窗口都严格执行该上限。小窗口下的自动摘要单独执行，最后一个允许轮次仍可正常给出答案。
+
+Claude Code 的窗口范围是 100,000–1,000,000 token。Codex 和 TRAE 的 `exec` 支持设置上下文窗口和自动压缩阈值。ZCode 使用模型配置中的 `properties.contextWindow` 和 `optionSpecs.maxOutputTokens.max`。JiuwenSwarm 使用 `react.max_iterations`、模型请求的 `max_tokens` 和原生上下文引擎。DeepAgents 的模型、循环和摘要策略由 Bundle 的 Python 工厂决定，当前接口无法为任意图覆盖三项限额。
+
+图片和 PDF 页图要求模型支持 `image`。页图模式会先把 PDF 渲染为图片；原始 PDF 要求模型支持 `pdf`，并接受该 Harness 使用的文件格式。上表的图片能力不包含音频和视频。[附件模式与示例](multimodal.zh-CN.md)
+
 ## 选哪一种 Solver
 
 | Solver | 用途 | 额外准备 |
@@ -62,7 +103,7 @@ local 中的文件和 Shell 操作使用当前操作系统用户的权限，可�
 | `claudecode` | 用 Claude Code 处理文本、图片和 PDF，在本机和 Docker 中执行 Bash | 支持流式 Anthropic Messages API 和工具调用的模型服务 |
 | `zcode` | 用 ZCode CLI 处理文本、图片和 PDF，在本机和 Docker 中执行 Bash | 支持流式 Chat Completions、Responses 或 Messages 和工具调用的模型服务 |
 | `trae` | 用 TRAE CLI 2.0 处理文本、图片和 PDF 页图，执行 shell 命令 | 支持流式 Chat Completions、Responses 或 Messages 和工具调用的模型服务 |
-| `codebuddy` | 用 CodeBuddy Code 处理文本、图片和 PDF 页图，执行 shell 命令 | 支持流式 Chat Completions 或 Responses 和工具调用的模型服务 |
+| `codebuddy` | 用 CodeBuddy Code 处理文本、图片和 PDF，执行 shell 命令 | 支持流式 Chat Completions 或 Responses 和工具调用的模型服务 |
 | `qwencode`、`kimicode`、`minimaxcode`、`opencode` | 使用对应的正式 Code CLI，处理文本、图片、PDF 页图与工具任务 | 支持流式 Chat Completions、Responses 或 Messages 的模型服务 |
 | `agentx-replay` | 按 Trace 请求模型，测量服务性能 | AgentX 所需的流式 API、长上下文、tokenizer 和 Python 或 Docker |
 | `choice-logprobs` | 直接请求单个输出位置的候选概率，供 MMLU 评分 | local 环境；模型服务必须实际返回 logprobs/top_logprobs；按需关闭思考 |
@@ -102,7 +143,7 @@ output:
 - **SimpleQA/HealthBench** 用 `benchmark.config.judgeService` 选择裁判，不会自动把被测模型当作裁判。`init` 会为它们生成 judge 服务变量；想显式复用同一个服务，可填 `judgeService: default`。
 - **Harbor/WorkBuddy** 的模型验证器使用 `benchmark.verifier.service`。Web 要求裁判，Office 的模型评分可选，详见[Harbor 指南](benchmarks/harbor.zh-CN.md)。这与记录型 Benchmark 的 `judgeService` 不是同一个配置入口。
 
-`api` 缺省为 `openai-completions`。显式 `base_url` 使用 Chat Completions 时，Pi/SimpleAgent 和内置 Judge 在未设置 `services.<名称>.maxTokens` 时不发送客户端输出上限；填写正整数时才发送。其他 Provider 和外部 Harness 保留各自协议的配置规则。
+`api` 缺省为 `openai-completions`。显式 `base_url` 使用 Chat Completions 时，Pi/SimpleAgent 和内置 Judge 在未给当前调用设置 `maxTokens` 时不发送客户端输出上限；填写正整数时才发送。其他 Provider 和外部 Harness 保留各自协议的配置规则。
 
 如需限制当前服务回复，可以在该服务条目增加 `maxTokens: 8192`。模型请求重试使用 `services.<名称>.retry.maxAttempts`，耗尽后结束当前 Attempt，不自动从头求解。
 
@@ -236,7 +277,7 @@ output:
 
 示例给首次构建预留 30 分钟，可按网络情况调整。
 
-`base_url` 使用接口基地址。Chat Completions 或 Responses 通常填写以 `/v1` 结尾的地址。还可设置 `api: openai-responses` 或 `api: anthropic-messages`。使用此 Solver 时省略 `maxTokens`、`contextWindow` 和 `retry`。
+`base_url` 使用接口基地址。Chat Completions 或 Responses 通常填写以 `/v1` 结尾的地址。还可设置 `api: openai-responses` 或 `api: anthropic-messages`。此 Solver 不接受服务字段 `retry`。
 
 本机和 Docker 都开放 Bash。本机 Bash 具有宿主进程权限，只用于可信任务。Windows 下使用 Bash 工具需要安装 Git Bash。任务需要容器隔离时使用 Docker。
 
@@ -272,7 +313,7 @@ output:
   directory: ./results/trae
 ```
 
-- TRAE 按所选模型服务的 `api` 请求接口。在 `base_url` 后，`openai-completions` 拼接 `/chat/completions`，`openai-responses` 拼接 `/responses`，`anthropic-messages` 拼接 `/messages`。`base_url` 需要包含服务要求的 API 前缀，例如连接 LiteLLM 时包含 `/v1`。服务字段 `maxTokens`、`contextWindow` 和 `retry` 须省略。
+- TRAE 按所选模型服务的 `api` 请求接口。在 `base_url` 后，`openai-completions` 拼接 `/chat/completions`，`openai-responses` 拼接 `/responses`，`anthropic-messages` 拼接 `/messages`。`base_url` 需要包含服务要求的 API 前缀，例如连接 LiteLLM 时包含 `/v1`。服务字段 `maxTokens` 和 `retry` 须省略。
 - WSL 使用 Bash，Windows 原生使用 PowerShell。两者都使用 `danger-full-access`，审批设置为 `never`。
 - 使用图片或 PDF `pages` 附件时，在服务中设置 `inputModalities: [text, image]`。PDF 使用页图模式。每次 attempt 在 `agent/` 下保存脱敏的会话事件、Evaluator 轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
@@ -310,11 +351,11 @@ output:
 - `base_url` 填 API 基址，例如 `https://api.openai.com/v1`。也可选 `api: openai-responses`。`services.<名称>.contextWindow` 写入原生 `maxInputTokens`，CodeBuddy 用它计算自动压缩阈值。`maxTokens` 指定模型输出上限。省略 `retry`。
 - `solver.config.maxTurns` 接受正整数，映射到 CodeBuddy 原生 `--max-turns`，限制每次求解的 Agent 执行轮数。省略时不传该参数，保留 CLI 默认值。轮数限制与 `run.solveTimeoutSeconds` 分别生效，先达到的限制会结束求解。
 - Windows 原生开放 PowerShell，WSL 和 Docker 开放 Bash。本机命令按宿主进程权限运行，只用于可信任务。Docker 命令在任务容器内执行。
-- 工作区的 `.codebuddy/models.json` 会覆盖实验指定的模型端点，发现该文件时 Solver 会在启动 CLI 前报错。使用图片或 PDF `pages` 附件时，设置 `inputModalities: [text, image]`。PDF 使用页图模式。每次 attempt 在 `agent/` 下保存脱敏的会话事件、轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
+- 工作区的 `.codebuddy/models.json` 会覆盖实验指定的模型端点，发现该文件时 Solver 会在启动 CLI 前报错。使用图片或 PDF `pages` 附件时，设置 `inputModalities: [text, image]`。原始 PDF 需声明 `pdf`，CodeBuddy 将其作为文件发送。每次 attempt 在 `agent/` 下保存脱敏的会话事件、轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
 ## 使用 Qwen Code、Kimi Code CLI、MiniMax Code 和 OpenCode
 
-CodeBuddy 2.183.0、Kimi 2.7.0 和 MiniMax 0.7.8 在安装时校验并应用 Evaluator 的版本补丁。CodeBuddy 可以关闭项目和插件技能。Kimi 可关闭技能和项目 MCP，MiniMax 可关闭项目 MCP。Solver 来源记录中的 `capabilityPatchSha256` 标识实际补丁，安装目录的 `capability-patch-receipt.json` 保存每个文件修改前后的 SHA-256。
+CodeBuddy 2.183.0、Kimi 2.7.0 和 MiniMax 0.7.8 在安装时校验并应用 Evaluator 的版本补丁。CodeBuddy 可以关闭项目和插件技能。Kimi 可关闭技能和项目 MCP，MiniMax 可关闭项目 MCP，并能在派发主请求前执行轮次上限。Solver 来源记录中的 `capabilityPatchSha256` 标识实际补丁，安装目录的 `capability-patch-receipt.json` 保存每个文件修改前后的 SHA-256。
 
 Evaluator 固定安装以下正式 CLI；不读取宿主已有登录状态，也不使用旧版 Python Kimi CLI。
 
@@ -355,9 +396,9 @@ run:
   solveTimeoutSeconds: 600
 ```
 
-`maxTokens` 控制单次回复，`maxTurns` 控制模型执行步数，`solveTimeoutSeconds` 控制整题时间，三者分别生效。省略 `maxTokens`、`maxTurns` 时采用 CLI 原有默认值。MiniMax 自定义模型默认单次输出上限为 16,384 Token；填写服务 `maxTokens` 可以覆盖它。Kimi 的原生 Chat 配置不发送输出上限，Evaluator 在模型转发入口补上显式 `maxTokens`。Qwen、Kimi、MiniMax 的模型上下文可用 `services.<名称>.contextWindow` 设置；Kimi 和 MiniMax 的未知自定义模型采用 200,000 上下文回退值，使用长上下文服务时应按服务能力填写。
+`maxTokens` 控制单次回复的输出，`maxTurns` 设置原生步数，`solveTimeoutSeconds` 设置整题时限。Qwen、Kimi、MiniMax 和 OpenCode 的 1 轮与 2 轮对照分别产生 1 次和 2 次主 Agent 请求。省略 Solver 限额时沿用服务配置和 CLI 默认值。MiniMax 自定义模型默认单次输出上限为 16,384 token。Kimi 的原生 Chat 配置不发送输出上限，Evaluator 在模型转发入口补上显式 `maxTokens`。Kimi 和 MiniMax 的未知自定义模型默认使用 200,000 token 上下文，可通过 `contextWindow` 指定服务实际容量。
 
-四者均按所选服务的 `api` 选择协议；服务 `reasoningEffort` 优先于 CLI 默认档位，并在实际模型请求中再次应用，避免被 CLI 的模型名称推断改写。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`；PDF 使用附件 `pages` 模式，当前不声明原生 PDF、音频或视频支持。默认将任务提供的技能目录和 MCP 服务传给所选 CLI。
+四者均按所选服务的 `api` 选择协议；服务 `reasoningEffort` 优先于 CLI 默认档位，并在实际模型请求中再次应用，避免被 CLI 的模型名称推断改写。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`。OpenCode 三种协议均可传原始 PDF。Qwen 的 Chat Completions 和 Messages 可传原始 PDF，Responses 使用页图。Kimi 的 ACP 会丢弃二进制资源，MiniMax 的 `--file` 对 PDF 只发送路径说明，这两者使用页图。默认将任务提供的技能目录和 MCP 服务传给所选 CLI。
 
 关闭内置工具时，CLI 模型请求只保留已注册的 MCP 工具声明。评测器也停止自动添加补充搜索，但任务自己声明的搜索 MCP 仍由 `mcp` 控制。任务的网络策略继续生效。
 
@@ -419,7 +460,7 @@ output:
 
 Docker 下，DSH 默认使用固定版本 0.2.2-rc.1。如果该版本不满足 Bundle 的 `harness.version`，Solver 从配置的 npm 源选择符合范围的最高版本。范围需要显式包含预发布版才能匹配 RC。Local 环境使用同一范围校验本机已安装的 DSH。
 
-输出上限优先放在 `services.<名称>.maxTokens`。AgentBundle 也接受 Solver 的 `maxTokens`，但两处同时填写会报错，不要重复配置。Evaluator 的配置与执行方式见本页；Bundle 的制作、格式与安装见上述 AgentBundle 项目文档。
+支持输出限额的 Bundle 使用 Solver 的 `maxTokens` 覆盖服务同名字段。Evaluator 的配置与执行方式见本页；Bundle 的制作、格式与安装见上述 AgentBundle 项目文档。
 
 使用 DSH 时，`services.<名称>.contextWindow` 设置当前模型用于压缩计算的上下文容量。使用原生 DeepSeek API Key 路由时，显式填写会为所选模型配置本地目录条目。上下文容量需要给单次回复上限和 Profile 的压缩预留量留出空间，默认预留 65,536 Token。DSH 的普通任务循环没有原生 `maxTurns` 配置，可以用 `run.solveTimeoutSeconds` 设置整题时限。
 

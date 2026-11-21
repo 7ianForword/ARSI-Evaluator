@@ -52,6 +52,47 @@ For Hermes or DeepAgents installation, use `--network network.yaml` to configure
 The environment controls whether shell commands can access the network. For MMLU-Pro, `benchmark.config.solveNetwork: model-api` with Docker allows the solve container to reach only the model API. See the [MMLU-Pro Playbook](../../playbook/mmlu-pro/mmlu-pro-simpleagent.yaml).
 
 
+## Generation limits and attachments
+
+Set positive integers under `benchmark.solver.config`. `maxTokens` caps the output tokens in one model response. `maxTurns` caps iterations of the main agent during one solve, as counted by the harness. `contextWindow` configures the context capacity used for automatic compaction. Harnesses can compact earlier to reserve space for a response or a summary.
+
+Solver values for `maxTokens` and `contextWindow` take precedence over the same service fields. Omitting both levels preserves harness and model defaults. An unsupported setting reports the harness and field name. AgentBundle checks limits after reading the Bundle to identify its harness.
+
+```yaml
+benchmark:
+  solver:
+    name: claudecode
+    config:
+      maxTokens: 8192
+      maxTurns: 12
+      contextWindow: 200000
+```
+
+The table reports Docker behavior for the pinned versions. A pass requires an observed output cap or attachment bytes at the model endpoint, a stop at the requested main-agent turn count, or an actual compaction with the smaller window. Unsupported means the current harness or Bundle entry rejects the setting. Every cell was exercised.
+
+| Solver / harness | `maxTokens` | `maxTurns` | `contextWindow` compaction | Image | PDF pages | Original PDF |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex | Unsupported | Unsupported | Pass | Pass | Pass | Unsupported |
+| TRAE CLI | Unsupported | Unsupported | Pass | Pass | Pass | Unsupported |
+| Claude Code | Pass | Pass | Pass | Pass | Pass | Pass |
+| CodeBuddy | Pass | Pass | Pass | Pass | Pass | Pass |
+| Qwen Code | Pass | Pass | Pass | Pass | Pass | Pass on Chat Completions and Messages. Unsupported on Responses |
+| Kimi Code | Pass | Pass | Pass | Pass | Pass | Unsupported |
+| MiniMax Code | Pass | Pass | Pass | Pass | Pass | Unsupported |
+| ZCode | Pass | Unsupported | Pass | Pass | Pass | Pass |
+| OpenCode | Pass | Pass | Pass | Pass | Pass | Pass |
+| SimpleAgent | Pass | Unsupported | Pass | Pass | Pass | Unsupported |
+| DSH (AgentBundle) | Pass | Unsupported | Pass | Pass | Pass | Unsupported |
+| Pi (AgentBundle) | Pass | Unsupported | Pass | Pass | Pass | Unsupported |
+| JiuwenSwarm (AgentBundle) | Pass | Pass | Pass | Pass | Pass | Unsupported |
+| DeepAgents (AgentBundle) | Unsupported | Unsupported | Unsupported | Pass | Pass | Pass |
+
+The Evaluator patch for MiniMax Code 0.7.8 checks `maxTurns` before dispatching a main-agent model request. Docker runs with 200,000- and 36,000-token windows stopped at the requested 1 or 2 turns. Automatic checkpoints use a separate request path, and the last allowed turn can still produce a final answer.
+
+Claude Code accepts windows from 100,000 to 1,000,000 tokens. Codex and TRAE configure the context window and automatic compaction threshold in `exec`. ZCode uses the model rules `properties.contextWindow` and `optionSpecs.maxOutputTokens.max`. JiuwenSwarm uses `react.max_iterations`, the model request's `max_tokens` and its native context engine. The DeepAgents Bundle's Python factory owns model construction, the loop and summarization. Its current interface cannot override these limits for arbitrary graphs.
+
+Images and rendered PDF pages require an image-capable model. Original PDFs require a PDF-capable model endpoint that accepts the harness's file format. The image column covers still images only. [Attachment modes and examples](multimodal.md)
+
 ## Choose a Solver
 
 | Solver | Purpose | Prerequisites |
@@ -62,7 +103,7 @@ The environment controls whether shell commands can access the network. For MMLU
 | `claudecode` | Claude Code for text, images, PDFs, and Bash in local and Docker runs | Model service with streaming Anthropic Messages API and tool calling |
 | `zcode` | ZCode CLI for text, images, PDFs, and Bash in local and Docker runs | Model service with streaming Chat Completions, Responses, or Messages and tool calling |
 | `trae` | TRAE CLI 2.0 for text, images, PDF pages, and shell commands | Model service with streaming Chat Completions, Responses, or Messages and tool calling |
-| `codebuddy` | CodeBuddy Code for text, images, PDF pages, and shell commands | Model service with streaming Chat Completions or Responses and tool calling |
+| `codebuddy` | CodeBuddy Code for text, images, PDFs, and shell commands | Model service with streaming Chat Completions or Responses and tool calling |
 | `qwencode`, `kimicode`, `minimaxcode`, `opencode` | Official Code CLIs for text, images, PDF pages and tool tasks | A streaming Chat Completions, Responses or Messages service |
 | `agentx-replay` | Trace-driven model requests for service performance | Streaming API, long context, tokenizer, and Python or Docker |
 | `choice-logprobs` | Candidate probabilities at one output position for MMLU | local environment; actual logprobs/top_logprobs support; disable thinking when needed |
@@ -102,7 +143,7 @@ Set all six environment variables as shown in [quick start](quick-start.md#3-set
 - **SimpleQA/HealthBench** select judges through `benchmark.config.judgeService`; the evaluated model is not automatically used as judge. `init` generates judge variables. Use `judgeService: default` to reuse the default service explicitly.
 - **Harbor/WorkBuddy** model verifiers use `benchmark.verifier.service`. Web requires a judge; Office model scoring is optional. See [Harbor](benchmarks/harbor.md). This differs from record-based benchmarks' `judgeService` field.
 
-`api` defaults to `openai-completions`. With an explicit Chat Completions `base_url`, Pi/SimpleAgent and built-in judges send no client output cap unless `services.<name>.maxTokens` is a positive integer. Other providers and external harnesses retain their protocol-specific rules.
+`api` defaults to `openai-completions`. With an explicit Chat Completions `base_url`, Pi/SimpleAgent and built-in judges send a client output cap only when an effective `maxTokens` is set. For SimpleAgent, `solver.config.maxTokens` takes precedence over the selected service value. Other providers and external harnesses retain their protocol-specific rules.
 
 Add `maxTokens: 8192` to a service to limit replies. Configure model request retries with `services.<name>.retry.maxAttempts`; exhaustion ends the current attempt without restarting the solution.
 
@@ -236,7 +277,7 @@ output:
 
 The preparation timeouts allow up to 30 minutes for the initial build and can be adjusted for your network.
 
-Use the API base URL. Chat Completions and Responses usually use a URL ending in `/v1`. The solver also accepts `api: openai-responses` and `api: anthropic-messages`. Omit `maxTokens`, `contextWindow`, and `retry`.
+Use the API base URL. Chat Completions and Responses usually use a URL ending in `/v1`. The solver also accepts `api: openai-responses` and `api: anthropic-messages`. Omit `retry`.
 
 ZCode enables Bash in local and Docker runs. Use local mode for trusted tasks since Bash runs with the host process's permissions. Install Git Bash for Bash tools on Windows. Use Docker for tasks that need container isolation.
 
@@ -272,7 +313,7 @@ output:
   directory: ./results/trae
 ```
 
-- The selected service's `api` controls the request path. TRAE appends `/chat/completions` for `openai-completions`, `/responses` for `openai-responses`, or `/messages` for `anthropic-messages` to `base_url`. Include any API prefix required by the service (for example, `/v1` for LiteLLM). Omit the service fields `maxTokens`, `contextWindow`, and `retry`.
+- The selected service's `api` controls the request path. TRAE appends `/chat/completions` for `openai-completions`, `/responses` for `openai-responses`, or `/messages` for `anthropic-messages` to `base_url`. Include any API prefix required by the service (for example, `/v1` for LiteLLM). Omit the service fields `maxTokens` and `retry`.
 - WSL uses Bash and native Windows uses PowerShell. Both use `danger-full-access` with approval set to `never`.
 - Set `inputModalities: [text, image]` for images and PDF `pages` attachments. Use pages mode for PDFs. Each attempt saves redacted session events, the Evaluator trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
@@ -310,11 +351,11 @@ output:
 - Set `base_url` to the API base, such as `https://api.openai.com/v1`. You can also select `api: openai-responses`. `services.<name>.contextWindow` sets the model's native `maxInputTokens`, which CodeBuddy uses to calculate when to compact. `maxTokens` sets the model output limit. Omit `retry`.
 - `solver.config.maxTurns` accepts a positive integer and maps to CodeBuddy's native `--max-turns`, limiting agentic turns per solve. When omitted, Evaluator leaves the CLI default unchanged. The turn limit and `run.solveTimeoutSeconds` apply independently; whichever is reached first ends the solve.
 - Native Windows exposes PowerShell. WSL and Docker expose Bash. Local commands run with the host process's permissions, so use local mode for trusted tasks. Docker commands run in the task container.
-- A workspace `.codebuddy/models.json` can override the selected endpoint. The solver reports an error before starting CodeBuddy when the file is present. For images and PDF `pages` attachments, declare `inputModalities: [text, image]`. Use pages mode for PDFs. Each attempt saves redacted events, trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
+- A workspace `.codebuddy/models.json` can override the selected endpoint. The solver reports an error before starting CodeBuddy when the file is present. For images and PDF `pages` attachments, declare `inputModalities: [text, image]`. Declare `pdf` to send original PDF files. Each attempt saves redacted events, trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
 ## Qwen Code, Kimi Code CLI, MiniMax Code and OpenCode
 
-Evaluator verifies and applies version-specific patches to CodeBuddy 2.183.0, Kimi 2.7.0, and MiniMax 0.7.8 during installation. CodeBuddy can disable project and plugin skills. Kimi can disable skills and project MCP, and MiniMax can disable project MCP. Solver provenance records `capabilityPatchSha256`. The installation contains `capability-patch-receipt.json` with the upstream and patched SHA-256 of each file.
+Evaluator verifies and applies version-specific patches to CodeBuddy 2.183.0, Kimi 2.7.0, and MiniMax 0.7.8 during installation. CodeBuddy can disable project and plugin skills. Kimi can disable skills and project MCP, and MiniMax can disable project MCP and enforce its main-agent turn limit before dispatch. Solver provenance records `capabilityPatchSha256`. The installation contains `capability-patch-receipt.json` with the upstream and patched SHA-256 of each file.
 
 Select `qwencode`, `kimicode`, `minimaxcode`, or `opencode` in `benchmark.solver.name`. Evaluator installs the pinned official CLIs in an isolated runtime and does not reuse host login state.
 
@@ -353,9 +394,9 @@ run:
   solveTimeoutSeconds: 600
 ```
 
-`services.*.maxTokens` overrides the native per-response output limit; `solver.config.maxTurns` limits agent model steps; `run.solveTimeoutSeconds` sets the whole-task deadline. Omitted limits preserve CLI defaults. MiniMax custom models default to 16,384 output tokens. Kimi does not apply its native output-cap option to Chat requests, so Evaluator adds an explicit service limit at the model relay. Configure `services.*.contextWindow` for the actual service capacity; unknown custom models in Kimi and MiniMax fall back to a 200,000-token context window.
+`maxTokens` sets the per-response output cap, `maxTurns` sets the native step limit, and `run.solveTimeoutSeconds` sets the task deadline. At limits of 1 and 2, Qwen, Kimi, MiniMax, and OpenCode issued 1 and 2 main-agent requests respectively. Omitted solver limits use the service settings and CLI defaults. MiniMax custom models default to 16,384 output tokens. Kimi omits its native output cap on Chat requests, so Evaluator applies an explicit `maxTokens` at the relay. Unknown custom models in Kimi and MiniMax default to a 200,000-token window. Set `contextWindow` for the actual service capacity.
 
-All four select Chat Completions, Responses, or Messages from the selected service's `api`. Explicit service `reasoningEffort` overrides native defaults and model-name inference. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. Use `pages` mode for PDF attachments. Task skill directories and MCP servers are passed to the selected CLI when enabled.
+All four select Chat Completions, Responses, or Messages from the selected service's `api`. Explicit service `reasoningEffort` overrides native defaults and model-name inference. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. OpenCode transmits original PDFs over all three APIs. Qwen supports original PDFs on Chat Completions and Messages, and requires pages on Responses. Kimi drops binary ACP resources. MiniMax sends a file reference without the PDF bytes. Use pages mode for these two CLIs. Task skill directories and MCP servers are passed to the selected CLI when enabled.
 
 When built-in tools are disabled, CLI model requests retain only registered MCP tool declarations. Evaluator also skips its automatic search fallback. Search tools provided by a task’s MCP servers follow the MCP setting and the task’s network policy.
 
@@ -417,7 +458,7 @@ Specify existing installations with Solver settings such as `dshhome`, `dshprofi
 
 For Docker, DSH uses the pinned default (0.2.2-rc.1) when it satisfies the Bundle’s `harness.version`. Otherwise the Solver selects the highest compatible release from the configured npm registry. Use an explicit prerelease comparator to allow a release candidate. Local environments check the installed DSH version against the same range.
 
-Prefer `services.<name>.maxTokens` for output limits. AgentBundle also accepts Solver `maxTokens`, but setting both is an error. This page covers Evaluator configuration and execution; use the linked AgentBundle documentation for bundle creation, formats and installation.
+For bundles that support an output cap, Solver `maxTokens` overrides the service field. This page covers Evaluator configuration and execution; use the linked AgentBundle documentation for bundle creation, formats and installation.
 
 For DSH, `services.<name>.contextWindow` sets the selected model's native context capacity for compaction. On the built-in DeepSeek API-key route, an explicit context size supplies a local catalog entry for the selected model. Leave room for the output cap and the profile's compaction headroom (65,536 tokens by default). DSH's ordinary task loop has no native `maxTurns` setting. Use `run.solveTimeoutSeconds` to set a task deadline.
 

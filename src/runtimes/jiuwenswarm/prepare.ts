@@ -48,7 +48,8 @@ models:
 
 /** Merge bounded model client timeouts into the install-written jiuwenswarm
  *  config.yaml without clobbering the bundle sections or bootstrap additions. */
-export function mergeJiuwenswarmModelConfig(existing: string, images = false, reasoningEffort?: ReasoningEffort): string {
+export function mergeJiuwenswarmModelConfig(existing: string, images = false, reasoningEffort?: ReasoningEffort,
+  limits: { maxTokens?: number; maxTurns?: number; contextWindow?: number } = {}): string {
   let doc: Record<string, unknown> = {};
   if (existing.trim() !== "") {
     const parsed = parseYaml(existing);
@@ -57,7 +58,15 @@ export function mergeJiuwenswarmModelConfig(existing: string, images = false, re
   doc.sandbox = { ...expectRecord(doc.sandbox ?? {}, "JiuwenSwarm sandbox"), enabled: false };
   doc.permissions = { ...expectRecord(doc.permissions ?? {}, "JiuwenSwarm permissions"), enabled: false };
   const additions = parseYaml(JIUWENSWARM_MODEL_CLIENT_TIMEOUTS) as Record<string, unknown>;
-  const react = (doc.react ?? {}) as Record<string, unknown>;
+  const react = expectRecord(doc.react ?? {}, "JiuwenSwarm react");
+  if (limits.maxTurns !== undefined) react.max_iterations = limits.maxTurns;
+  if (limits.contextWindow !== undefined) {
+    react.context_engine_config = {
+      ...expectRecord(react.context_engine_config ?? {}, "JiuwenSwarm context engine"),
+      enabled: true, context_window_tokens: limits.contextWindow,
+    };
+  }
+  if (limits.maxTurns !== undefined || limits.contextWindow !== undefined) doc.react = react;
   if (images && react.enable_read_image_multimodal === false)
     throw new AgentBundleError("CONFIG_INVALID", "JiuwenSwarm react.enable_read_image_multimodal disables native image input");
   const models = (doc.models ?? {}) as Record<string, unknown>;
@@ -75,6 +84,8 @@ export function mergeJiuwenswarmModelConfig(existing: string, images = false, re
     const requestConfig = expectRecord(model.model_config_obj ?? {}, "jiuwenswarm model_config_obj");
     const configured = reasoningEffort === undefined ? requestConfig
       : applyReasoningEffort(requestConfig, "openai-completions", reasoningEffort);
+    if (limits.maxTokens !== undefined) configured.max_tokens = limits.maxTokens;
+    if (limits.contextWindow !== undefined) configured.context_window = limits.contextWindow;
     if (reasoningEffort !== undefined && requestConfig.extra_body !== undefined)
       configured.extra_body = applyReasoningEffort(requestConfig.extra_body, "openai-completions", reasoningEffort);
     if (images && (model.model_client_config as Record<string, unknown> | undefined)?.supports_vision === false)
@@ -91,6 +102,14 @@ export function mergeJiuwenswarmModelConfig(existing: string, images = false, re
     }, model_config_obj: configured };
   });
   return stringifyYaml({ ...doc, ...(images ? { react: { ...react, enable_read_image_multimodal: true } } : {}), models: { ...models, defaults: merged } });
+}
+
+function jiuwenswarmLimits({ model, options }: BundlePreparation) {
+  return {
+    ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+    ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+    ...(options.limits?.maxTurns === undefined ? {} : { maxTurns: options.limits.maxTurns }),
+  };
 }
 
 function configureJiuwenswarmTools(config: string, preparation: BundlePreparation, root: string, local: boolean) {
@@ -154,12 +173,12 @@ export async function prepareJiuwenswarm(
   const node = process.execPath;
   const version = preparation.harnessVersion ?? JIUWENSWARM_VERSION;
   const images = imageInputEnabled(preparation);
-  // Model binding is per-attempt environment, not home content: different
-  // model configurations safely share one installation home.
+  // Limits are persisted in config.yaml and participate in the home identity.
   const policy = pickSolverToolPolicy(preparation.options);
   const hasPolicy = Object.keys(policy).length > 0;
+  const limits = jiuwenswarmLimits(preparation);
   const identity = createHash("sha256")
-    .update(canonicalJson({ kind: "jiuwenswarm", candidate, runtime: runtime.identity, images, ...(hasPolicy ? { toolPolicy: policy } : {}),
+    .update(canonicalJson({ kind: "jiuwenswarm", candidate, runtime: runtime.identity, images, ...limits, ...(hasPolicy ? { toolPolicy: policy } : {}),
       ...(preparation.model.reasoningEffort === undefined ? {} : { reasoningEffort: preparation.model.reasoningEffort }) }))
     .digest("hex");
   const configuredHome = preparation.options.jiuwenswarmhome;
@@ -228,7 +247,8 @@ export async function prepareJiuwenswarm(
       return "";
     });
     await mkdir(dirname(configPath), { recursive: true });
-    await writeFile(configPath, configureJiuwenswarmTools(mergeJiuwenswarmModelConfig(installedConfig, images, preparation.model.reasoningEffort), preparation, runtime.root, true), { mode: 0o600 });
+    const configured = mergeJiuwenswarmModelConfig(installedConfig, images, preparation.model.reasoningEffort, limits);
+    await writeFile(configPath, configureJiuwenswarmTools(configured, preparation, runtime.root, true), { mode: 0o600 });
     return preparedAttempt(
       release,
       async (input, signal) => {
@@ -319,8 +339,9 @@ export async function prepareJiuwenswarmDocker(
   // environment exactly as in local mode.
   const policy = pickSolverToolPolicy(preparation.options);
   const hasPolicy = Object.keys(policy).length > 0;
+  const limits = jiuwenswarmLimits(preparation);
   const identity = createHash("sha256")
-    .update(canonicalJson({ kind: "jiuwenswarm-docker", candidate, runtime: runtime.identity, ...(hasPolicy ? { toolPolicy: policy } : {}),
+    .update(canonicalJson({ kind: "jiuwenswarm-docker", candidate, runtime: runtime.identity, ...limits, ...(hasPolicy ? { toolPolicy: policy } : {}),
       ...(preparation.model.reasoningEffort === undefined ? {} : { reasoningEffort: preparation.model.reasoningEffort }) }))
     .digest("hex");
   const state = posix.join(stateRoot, identity.slice(0, 24));
@@ -375,7 +396,7 @@ export async function prepareJiuwenswarmDocker(
       )
     ).trim(),
   );
-  const mergedConfig = configureJiuwenswarmTools(mergeJiuwenswarmModelConfig(installedConfig, images, preparation.model.reasoningEffort), preparation, root, false);
+  const mergedConfig = configureJiuwenswarmTools(mergeJiuwenswarmModelConfig(installedConfig, images, preparation.model.reasoningEffort, limits), preparation, root, false);
   const configYaml = join(context.paths.agent, "jiuwenswarm-config.yaml");
   await mkdir(context.paths.agent, { recursive: true });
   await writeFile(configYaml, mergedConfig, { mode: 0o600 });

@@ -44,6 +44,9 @@ export function consumeClaudeCode(
       result = event;
     },
     finish(exit, stderr) {
+      if (result?.subtype === "error_max_turns") {
+        throw new EvaluatorError("SOLVER_RESULT_INCOMPLETE", "Claude Code reached maxTurns before producing a final answer");
+      }
       if (exit.code !== 0 || exit.signal !== null || (result && (result.is_error !== false || result.subtype !== "success"))) {
         const errors = Array.isArray(result?.errors) ? result.errors.filter(item => typeof item === "string").join("\n") : "";
         const resultText = typeof result?.result === "string" ? result.result : "";

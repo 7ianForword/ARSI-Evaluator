@@ -1,3 +1,4 @@
+import { parseAgentOptions, type AgentLimits } from "./agent-limits.js";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -7,7 +8,7 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
-import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 import { consumeTrae } from "../../runtimes/trae/protocol.js";
 import { TRAE_VERSION, traeRuntimeInstallation } from "../../runtimes/trae/runtime.js";
@@ -25,8 +26,8 @@ const TRAE_WIRE_APIS = new Map<string, string>([
   ["anthropic-messages", "anthropic_messages"],
 ]);
 
-export function parseTraeConfig(value: unknown): SolverToolPolicy {
-  return parseSolverToolPolicy(value, "trae config");
+export function parseTraeConfig(value: unknown): SolverToolPolicy & AgentLimits {
+  return parseAgentOptions(value, "trae");
 }
 
 function apiBase(endpoint: string | null): string {
@@ -51,8 +52,8 @@ export class TraeSolver implements Solver {
     }
     this.wireApi = wireApi;
     this.endpoint = apiBase(model.endpoint);
-    if (model.maxTokens !== undefined || model.contextWindow !== undefined || model.retry !== undefined) {
-      throw new TypeError("trae does not support services.*.maxTokens, services.*.contextWindow or services.*.retry");
+    if (model.maxTokens !== undefined || model.retry !== undefined) {
+      throw new TypeError("trae does not support services.*.maxTokens or services.*.retry");
     }
   }
 
@@ -96,6 +97,7 @@ export class TraeSolver implements Solver {
       'approval_policy="never"',
       "allow_login_shell=false",
       ...(policy.webSearch === "disabled" || policy.tools === "none" ? ['web_search="disabled"'] : []),
+      ...(model.contextWindow === undefined ? [] : [`model_context_window=${model.contextWindow}`, `model_auto_compact_token_limit=${model.contextWindow}`]),
       "analytics.enabled=false",
       "features.hooks=false",
       ...(policy.tools === "none" ? [`model_tool_modes={ ${JSON.stringify(model.name)} = "direct" }`] : []),

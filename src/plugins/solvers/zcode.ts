@@ -7,15 +7,15 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
-import { parseSolverToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 import { consumeZCode } from "../../runtimes/zcode/protocol.js";
 import { readZCodeSourceLock, ZCODE_ENTRY, zcodeRuntimeInstallation } from "../../runtimes/zcode/runtime.js";
 
 export function parseZCodeConfig(value: unknown): SolverToolPolicy {
   const policy = parseSolverToolPolicy(value, "zcode config");
-  if (policy.webSearch === "enabled") {
-    unsupportedToolPolicy("zcode", "native WebSearch is unavailable on the configured custom model route");
+  if (policy.webSearch === "enabled" && policy.mcp === "disabled") {
+    unsupportedToolPolicy("zcode", "webSearch: enabled cannot be combined with mcp: disabled because the custom model route has no native WebSearch and supplementary search requires MCP.");
   }
   return policy;
 }
@@ -62,9 +62,6 @@ export class ZCodeSolver implements Solver {
     if (!auth.value.trim() || /[\r\n\0]/u.test(auth.value)) {
       throw new EvaluatorError("MODEL_AUTH_FAILED", "zcode requires a non-empty, single-line API key on its selected service");
     }
-    if (input.skillsDirectories?.length || input.mcpServers?.length) {
-      throw new EvaluatorError("BENCHMARK_UNSUPPORTED", "zcode does not support task skills or MCP servers");
-    }
     const runtime = session.runtime;
     if (runtime?.stateRoot === undefined) {
       throw new EvaluatorError("ENV_RUNTIME_INSTALL_FAILED", "zcode requires an environment-prepared runtime with writable state");
@@ -85,8 +82,9 @@ export class ZCodeSolver implements Solver {
         env: { NODE_USE_ENV_PROXY: "1" },
         inheritEnv: false,
         input: Buffer.from(JSON.stringify({
+          outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers,
           apiKey: auth.value, api: model.api, baseUrl, model: model.name, inputModalities: model.inputModalities, reasoningEffort: model.reasoningEffort,
-          prompt: input.prompt, token, media, toolPolicy: this.policy,
+          prompt: input.prompt, token, media, toolPolicy: sessionToolPolicy("zcode", this.policy, session),
         }), "utf8"),
       }, signal);
       return await consumeZCode(handle, context, [auth.value, token]);

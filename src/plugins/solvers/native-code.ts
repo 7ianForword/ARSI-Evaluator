@@ -8,10 +8,11 @@ import type { AttemptContext, Solver, SolverProvenance } from "../../core/contra
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
 import { expectPositiveInteger, expectRecord } from "../../core/validation/input.js";
-import { parseSolverToolPolicy, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
+import { parseSolverToolPolicy, sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 import { consumeNativeCode } from "../../runtimes/shared/native-code-protocol.js";
 import { nativeCodeInstallation, nativeCodeVersions, type NativeCodeName } from "../../runtimes/shared/native-code-runtime.js";
+import { lockedCliPatch } from "../../runtimes/shared/locked-cli-patch.js";
 
 export type NativeCodeConfig = SolverToolPolicy & { maxTurns?: number };
 
@@ -44,11 +45,6 @@ export class NativeCodeSolver implements Solver {
     }
     if (model.retry !== undefined) throw new TypeError(`${name} does not support services.*.retry`);
     this.endpoint = apiBase(model.endpoint);
-    // Native search needs backend-specific settings and authentication,
-    // which this model-only service binding does not configure.
-    if (config.webSearch === "enabled" && name !== "opencode") {
-      unsupportedToolPolicy(name, "native web search requires a vendor search service; the selected model service does not configure one");
-    }
   }
 
   requirements(): RuntimeRequirement[] {
@@ -60,7 +56,9 @@ export class NativeCodeSolver implements Solver {
   async provenance(signal: AbortSignal): Promise<SolverProvenance> {
     signal.throwIfAborted();
     const { maxTurns, ...policy } = this.config;
+    const patch = this.name === "kimicode" || this.name === "minimaxcode" ? await lockedCliPatch(this.name) : undefined;
     return { ...toolPolicyProvenance(policy, `${this.name}-native-model-relay`), harnessVersion: nativeCodeVersions[this.name],
+      ...(patch ? { capabilityPatchSha256: patch.digest } : {}),
       harnessEntry: this.name === "minimaxcode" ? "exec" : "acp",
       ...(maxTurns === undefined ? {} : { maxTurns: String(maxTurns) }) };
   }
@@ -69,9 +67,6 @@ export class NativeCodeSolver implements Solver {
     context.signal.throwIfAborted();
     const { model, auth } = this.binding;
     if (!auth.value.trim() || /[\r\n\0]/u.test(auth.value)) throw new EvaluatorError("MODEL_AUTH_FAILED", `${this.name} requires a non-empty, single-line API key`);
-    if (input.skillsDirectories?.length || input.mcpServers?.length) {
-      throw new EvaluatorError("BENCHMARK_UNSUPPORTED", `${this.name} does not yet support task-provided skills or MCP servers`);
-    }
     if (input.attachments?.some(attachment => attachment.kind === "pdf" && attachment.mode === "native")) {
       throw new EvaluatorError("BENCHMARK_UNSUPPORTED", `${this.name} requires PDF attachments in pages mode`);
     }
@@ -91,7 +86,7 @@ export class NativeCodeSolver implements Solver {
         env: { NODE_USE_ENV_PROXY: "1" },
         input: Buffer.from(JSON.stringify({ apiKey: auth.value, api: model.api, baseUrl, model: model.name,
           maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort,
-          toolPolicy: this.config, maxTurns: this.config.maxTurns, prompt: input.prompt,
+          toolPolicy: sessionToolPolicy(this.name, this.config, session), outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers, maxTurns: this.config.maxTurns, prompt: input.prompt,
           supportsImages: model.inputModalities?.includes("image") ?? false, token, media }), "utf8"),
       }, context.signal);
       return await consumeNativeCode(this.name, handle, context, [auth.value, token]);

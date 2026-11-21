@@ -20,7 +20,6 @@ test.each(names)("%s validates tool policies and native step limits", name => {
   expect(parseNativeCodeConfig(name, { tools: "none", webFetch: "disabled" })).toEqual({ tools: "none", webFetch: "disabled" });
   for (const value of [0, -1, 1.5, "2000", Number.MAX_SAFE_INTEGER + 1]) expect(() => parseNativeCodeConfig(name, { maxTurns: value })).toThrow();
   expect(() => parseNativeCodeConfig(name, { maxTokens: 2 })).toThrow(/unknown/u);
-  expect(() => parseNativeCodeConfig(name, { tools: "none", webSearch: "enabled" })).toThrow(/conflict/u);
   expect(() => parseNativeCodeConfig(name, { webFetch: false })).toThrow(/default, disabled or enabled/u);
 });
 
@@ -41,8 +40,7 @@ test.each(names)("%s binds service controls and does not pretend an unavailable 
   const solver = new NativeCodeSolver(name, service, { tools: "none", maxTurns: 2 });
   expect(solver.inputModalities).toContain("image");
   expect(() => new NativeCodeSolver(name, { ...binding, model: { ...binding.model, api: "unsupported" } })).toThrow(/requires api/u);
-  if (name === "opencode") expect(() => new NativeCodeSolver(name, service, { webSearch: "enabled" })).not.toThrow();
-  else expect(() => new NativeCodeSolver(name, service, { webSearch: "enabled" })).toThrow(/vendor search/u);
+  expect(() => new NativeCodeSolver(name, service, { webSearch: "enabled" })).not.toThrow();
 });
 
 async function context(): Promise<AttemptContext> {

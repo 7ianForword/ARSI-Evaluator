@@ -1,3 +1,4 @@
+import { pickSolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import type { Context } from "@deepseek-ai/cordis";
 import { SimpleAgentSolver, parseSimpleAgentConfig } from "./simpleagent.js";
 import { ChoiceLogprobsSolver, parseChoiceLogprobsConfig } from "./choice-logprobs.js";
@@ -42,9 +43,7 @@ export function apply(ctx: Context): void {
       const model = agentBundleModel(bound.model, config.maxTokens, runtime.solverService);
       const solver = new AgentBundleSolver(runtime.resolvePath(config.path), model, bound.auth, undefined, {
         environmentName: runtime.environmentName ?? "local",
-        ...(config.tools === undefined ? {} : { tools: config.tools }),
-        ...(config.webSearch === undefined ? {} : { webSearch: config.webSearch }),
-        ...(config.webFetch === undefined ? {} : { webFetch: config.webFetch }),
+        ...pickSolverToolPolicy(config),
         ...(config.dshhome === undefined ? {} : { dshhome: runtime.resolvePath(config.dshhome) }),
         ...(config.dshprofile === undefined ? {} : { dshprofile: config.dshprofile }),
         ...(config.hermeshome === undefined ? {} : { hermeshome: runtime.resolvePath(config.hermeshome) }),
@@ -76,9 +75,7 @@ export function apply(ctx: Context): void {
             },
         config.toolPolicy,
         {
-          ...(config.tools === undefined ? {} : { tools: config.tools }),
-          ...(config.webSearch === undefined ? {} : { webSearch: config.webSearch }),
-          ...(config.webFetch === undefined ? {} : { webFetch: config.webFetch }),
+          ...pickSolverToolPolicy(config),
           ...(config.bundle?.webSearchTools === undefined ? {} : { webSearchTools: config.bundle.webSearchTools }),
           ...(config.bundle?.webFetchTools === undefined ? {} : { webFetchTools: config.bundle.webFetchTools }),
         },

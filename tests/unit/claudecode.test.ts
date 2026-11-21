@@ -66,7 +66,7 @@ test("Claude Code rejects a requested web tool missing from the native inventory
   const context = await attempt();
   const handle = processWith(chunks(jsonl({ type: "system", subtype: "init", tools: ["Bash", "WebFetch"] }, resultEvent)));
   await expect(consumeClaudeCode(handle, context, secret, ["WebFetch", "WebSearch"])).rejects.toMatchObject({
-    code: "CONFIG_INVALID", message: expect.stringContaining("WebSearch is unavailable"),
+    code: "CONFIG_INVALID", message: expect.stringContaining("webSearch: enabled requires WebSearch"),
   });
   expect(handle.stop).toHaveBeenCalledOnce();
 });

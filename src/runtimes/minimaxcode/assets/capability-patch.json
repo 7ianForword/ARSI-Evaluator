@@ -1,0 +1,17 @@
+{
+  "package": "@minimax-ai/code",
+  "version": "0.7.8",
+  "files": [
+    {
+      "path": "chunks/chunk-CUW4IHOK.js",
+      "beforeSha256": "bfdaf8f9bf1f4d921222d37341b1503ddd58c2132694799c2347ffbc9bc38c54",
+      "afterSha256": "d15810122e606bfe7214b52ef05a0b146fb7043522ef4c4bd61a89492f0dcd91",
+      "replacements": [
+        {
+          "before": "async resolve(t){if(!t?.workspaceRoot||!t.sessionId)return{};let n=await qUs(t.workspaceRoot)",
+          "after": "async resolve(t){if(process.env.EVALUATOR_DISABLE_MCP===\"1\"||!t?.workspaceRoot||!t.sessionId)return{};let n=await qUs(t.workspaceRoot)"
+        }
+      ]
+    }
+  ]
+}

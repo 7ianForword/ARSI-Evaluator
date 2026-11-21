@@ -17,7 +17,7 @@ import type { AttemptContext, PreparedSolver, Solver, SolverProvenance } from ".
 import type { SolveResult } from "../../core/contracts/result.js";
 import type { JsonValue, PublicTask } from "../../core/contracts/task.js";
 import { canonicalJson } from "../../core/results/run-manifest.js";
-import { parseSolverToolPolicy, parseWebToolNames, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy, type WebToolNames } from "../../core/validation/solver-tool-policy.js";
+import { pickSolverToolPolicy, sessionToolPolicy, parseSolverToolPolicy, parseWebToolNames, toolPolicyProvenance, unsupportedToolPolicy, type SolverToolPolicy, type WebToolNames } from "../../core/validation/solver-tool-policy.js";
 import { AgentBundleError, type VerifiedBundle } from "../../runtimes/agentbundle/cli.js";
 import { DSH_VERSION, describeDshBundleRuntime, type DshBundleRuntime } from "../../runtimes/dsh/runtime.js";
 import { AGENT_BUNDLE_CORE_VERSION, assertHarnessVersionCompatible, verifyBundleCandidate } from "../../runtimes/agentbundle/sdk.js";
@@ -59,7 +59,7 @@ export function parseAgentBundleConfig(
   if (config.pi !== undefined) {
     const pi = expectRecord(config.pi, "agentbundle.pi");
     rejectUnknown(pi, ["settings", "webSearchTools", "webFetchTools"], "agentbundle.pi");
-    result.pi = parseWebToolNames(pi, "agentbundle.pi");
+    result.pi = parseWebToolNames(pi, "agentbundle.pi", policy);
     if (pi.settings !== undefined) {
       const settings = expectRecord(pi.settings, "agentbundle.pi.settings");
       assertJsonValue(settings, "agentbundle.pi.settings");
@@ -161,9 +161,13 @@ export class AgentBundleSolver implements Solver {
   async provenance(signal: AbortSignal, previous?: SolverProvenance): Promise<SolverProvenance> {
     signal.throwIfAborted();
     const identified = await verifyBundleCandidate(this.path);
-    const { tools, webSearch, webFetch } = this.options;
-    const policy = parseSolverToolPolicy({ tools, webSearch, webFetch }, "agentbundle");
-    const method = { dsh: "cordis-tools", pi: "pi-sdk", jiuwenswarm: "jiuwenswarm-rail" }[identified.harness.name];
+    const policy = pickSolverToolPolicy(this.options);
+    const harness = identified.harness.name;
+    const supplementaryOnly = harness === "hermes";
+    if (supplementaryOnly && Object.keys(policy).some(key => key !== "webSearch" || policy.webSearch !== "enabled")) {
+      unsupportedToolPolicy(harness, "the bundle can install its own tools and middleware; this runtime can add search but cannot enforce the requested restrictions");
+    }
+    const method = { dsh: "cordis-tools", pi: "pi-sdk", jiuwenswarm: "jiuwenswarm-rail", deepagents: "langchain-middleware", hermes: "hermes-mcp" }[identified.harness.name];
     if (Object.keys(policy).length > 0 && method === undefined) {
       unsupportedToolPolicy(identified.harness.name, "tool policy is unavailable for this Bundle harness");
     }
@@ -254,6 +258,10 @@ export class AgentBundleSolver implements Solver {
     if (!this.candidate) await this.provenance(context.signal);
     const candidate = this.candidate;
     const runtime = session.runtime;
+    const options = sessionToolPolicy(candidate?.harness.name ?? "agentbundle", this.options, session);
+    if (candidate && ["dify", "hermes"].includes(candidate.harness.name) && options.webSearch === "disabled") {
+      unsupportedToolPolicy(candidate.harness.name, "the workflow owns web tools and cannot guarantee that hosted search is disabled");
+    }
     if (candidate?.harness.name === "dify" && this.options.dify !== undefined)
       return prepareDify(this.path, this.options.dify, session, context, candidate, this.model);
     if (!candidate || !runtime?.stateRoot)
@@ -261,7 +269,7 @@ export class AgentBundleSolver implements Solver {
         "ENV_RUNTIME_INSTALL_FAILED",
         "agentbundle requires an environment-prepared runtime and state directory",
       );
-    const bundle = { network: this.network, path: this.path, model: this.model, auth: this.auth, options: this.options,
+    const bundle = { network: this.network, path: this.path, model: this.model, auth: this.auth, options,
       harnessVersion: this.harnessVersion };
     if (candidate.harness.name === "deepagents") {
       if (this.options.environmentName === "docker") return prepareDeepagentsDocker(bundle, session, context, candidate);

@@ -72,13 +72,16 @@ const server = createServer(async (request, response) => {
   const markerArguments = { command: markerCommand };
   if (shellTool?.function?.parameters?.required?.includes("description")) markerArguments.description = `write ${task} marker`;
   if (!hasToolResult) {
+    const taskMcp = userText.includes("call the task MCP");
+    const name = taskMcp ? "mcp__task__echo" : shell;
+    const args = taskMcp ? { value: "task-mcp-called" } : markerArguments;
     const chunks = [
       {
         id: `tool-${task}`,
         object: "chat.completion.chunk",
         created: 1,
         model: body.model,
-        choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: `call-${task}`, type: "function", function: { name: shell, arguments: JSON.stringify(markerArguments) } }] }, finish_reason: null }],
+        choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: `call-${task}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }],
       },
       {
         id: `tool-${task}`,

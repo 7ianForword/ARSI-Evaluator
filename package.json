@@ -26,6 +26,7 @@
     "build": "node scripts/build-network-bootstrap.mjs && node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/build-plugins.mjs && node scripts/package-runtime.mjs",
     "dev": "node scripts/dev.mjs",
     "ray:ensure": "pnpm install --frozen-lockfile && pnpm build && node scripts/ray-smoke/ensure.mjs",
+    "check:dependencies": "node scripts/check-dependencies.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest",
     "network:bundle": "node scripts/build-network-bootstrap.mjs"
@@ -49,7 +50,7 @@
     "@earendil-works/pi-tui": "1.1.0",
     "@iarna/toml": "2.2.5",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "agent-bundle-core": "git+https://github.com/ARSI-LAB/agentbundle.git#0.0.1&path:/packages/core",
+    "agent-bundle-core": "git+https://github.com/ARSI-LAB/agentbundle.git#0.0.2&path:/packages/core",
     "commander": "15.0.0",
     "cross-spawn": "7.0.6",
     "hyparquet": "1.31.1",

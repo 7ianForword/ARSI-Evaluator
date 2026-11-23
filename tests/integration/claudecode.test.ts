@@ -62,6 +62,30 @@ async function checkEvidence(agent: string): Promise<void> {
   }
 }
 
+test.skipIf(!enabled("local")).each(["none", "model-api"] as const)("Claude local hides both web tools on %s by default", async network => {
+  const root = await mkdtemp(join(tmpdir(), "arsi-claude-network-"));
+  const paths = { root, agent: join(root, "agent"), verifier: join(root, "verifier"), artifacts: join(root, "artifacts") };
+  const fixture = await messagesFixture(false, []);
+  const signal = AbortSignal.timeout(180_000);
+  try {
+    const solver = new ClaudeCodeSolver({ model: { name: model, endpoint: fixture.endpoint, provider: null, api: "anthropic-messages" },
+      auth: { value: secret, reference: null } });
+    const session = await new LocalEnvironment().prepare({ image: null, workdir: ".", network, initialFiles: [], runtime: solver.requirements(),
+      installation: await solver.runtimeInstallation(signal) }, paths, "solve", signal);
+    try {
+      const result = await solver.solve({ id: "restricted", prompt: "Reply with the answer." }, session, {
+        key: { runId: "local", taskId: "restricted", attemptId: "first" }, paths, signal });
+      expect(result.finalText).toBe(finalText);
+      expect(fixture.requests[0]?.tools).toContain("Bash");
+      expect(fixture.requests[0]?.tools).not.toContain("WebFetch");
+      expect(fixture.requests[0]?.tools).not.toContain("WebSearch");
+    } finally { await session.dispose(signal); }
+  } finally {
+    await fixture.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 210_000);
+
 test.skipIf(!enabled("local"))("Claude Code uses Bash locally and limits native file tools to the task workspace", async () => {
   const root = await mkdtemp(join(tmpdir(), "arsi-evaluator-claude-local-"));
   const steps: Tool[] = [];

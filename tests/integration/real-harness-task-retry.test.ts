@@ -79,9 +79,11 @@ async function exercise(solver: Solver, fault: Fault) {
     let handle: ProcessHandle;
     if (solver === "deepagents") {
       const bundle = join(home, "bundle"); await mkdir(bundle);
-      await writeFile(join(bundle, "agent.py"), `import os\nfrom deepagents import create_deep_agent\nfrom langchain_openai import ChatOpenAI\ndef build_agent(middleware):\n    model = ChatOpenAI(model='gpt-4.1', base_url=os.environ['AGENT_MODEL_BASE_URL'], api_key=os.environ['AGENT_MODEL_API_KEY'], streaming=True, timeout=10)\n    return create_deep_agent(model=model, middleware=list(middleware))\n`);
-      handle = launch(join(runtime!, "deep-env/bin/python"), [resolve("src/runtimes/deepagents/assets/runner.py"), "--bundle-dir", bundle], session.workdir,
-        { ...env, AGENT_MODEL_NAME: "gpt-4.1", AGENT_MODEL_BASE_URL: endpoint, AGENT_MODEL_API_KEY: "fixture-key" }, "Respond FIXTURE_OK without tools.", capture);
+      await writeFile(join(bundle, "agent.py"), `import os\nfrom deepagents import create_deep_agent\nfrom langchain_openai import ChatOpenAI\ndef build_agent_for_run(*, policy, mcp_servers, skills_directories, tools, middleware):\n    model = ChatOpenAI(model='gpt-4.1', base_url=os.environ['AGENT_MODEL_BASE_URL'], api_key=os.environ['AGENT_MODEL_API_KEY'], streaming=True, timeout=10)\n    return create_deep_agent(model=model, tools=tools, middleware=list(middleware))\n`);
+      handle = launch(join(runtime!, "deep-env/bin/python"), [resolve("src/runtimes/deepagents/assets/runner.py"), "--bundle-dir", bundle,
+        "--factory-module", "agent.py"], session.workdir,
+        { ...env, AGENT_MODEL_NAME: "gpt-4.1", AGENT_MODEL_BASE_URL: endpoint, AGENT_MODEL_API_KEY: "fixture-key" },
+        JSON.stringify({ prompt: "Respond FIXTURE_OK without tools." }), capture);
     } else if (solver === "jiuwenswarm") {
       await mkdir(join(home, "config"));
       await writeFile(join(home, "config/config.yaml"), await readFile(join(runtime!, "swarm-source/jiuwenswarm/resources/config.yaml")));
@@ -100,7 +102,7 @@ async function exercise(solver: Solver, fault: Fault) {
       expect((await config.done).code, setup.stderr).toBe(0);
       expect(setup.stdout).toContain("id: llm-retry");
       await writeFile(join(home, "model.patch.yaml"), dshModelPatch({ name: "gpt-4.1", endpoint, provider: "openai", api: "openai-completions" }));
-      await writeFile(join(home, "permissions.yaml"), dshPermissionPatch("danger-full-access"));
+      await writeFile(join(home, "permissions.yaml"), dshPermissionPatch());
       handle = launch("docker", [...docker, "--import", "/tmp/evaluator-output-hook.mjs", cli, "--profile", "evaluator",
         "--patch", join(home, "model.patch.yaml"), "--patch", join(home, "permissions.yaml"), "--json"], session.workdir, env, "Respond FIXTURE_OK without tools.", capture);
     }
@@ -151,9 +153,9 @@ async function exercise(solver: Solver, fault: Fault) {
   }
 }
 
-test.skipIf(!runtime || !image || !output).concurrent.each(["dsh", "jiuwenswarm", "deepagents"] as const)(
-  "real %s reports model failures to task retry admission", async solver => {
+for (const solver of ["dsh", "jiuwenswarm", "deepagents"] as const) {
+  test.skipIf(!runtime || !output || (solver === "dsh" && !image)).concurrent(`real ${solver} reports model failures to task retry admission`, async () => {
     await mkdir(output!, { recursive: true });
     for (const fault of ["healthy", "socket-once", "sse-once", "sse-always", "http-400"] as const) await exercise(solver, fault);
-  }, 600_000,
-);
+  }, 600_000);
+}

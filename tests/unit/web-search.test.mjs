@@ -162,7 +162,7 @@ test.each([false, true])("Responses continuation falls back using the model-emit
       res.end(JSON.stringify({ result: { content: [{ text: JSON.stringify({ backend: "exa", results: [source] }) }] } }));
       return;
     }
-    if (body.previous_response_id) outputs.push(body.input[0].output);
+    if (body.previous_response_id) outputs.push({ model: body.model, output: body.input[0].output });
     const item = { type: "function_call", call_id: "same-id", name: "web_search", arguments: JSON.stringify({ query: body.input }) };
     const result = { object: "response", id: "resp-" + (body.previous_response_id ?? body.input), output: body.previous_response_id ? [] : [item] };
     if (stream) {
@@ -185,12 +185,15 @@ test.each([false, true])("Responses continuation falls back using the model-emit
       expect(reply.status).toBe(200);
       await reply.text();
     };
-    for (const input of ["first", "second"]) await post({ input });
+    for (const input of ["first", "second"]) await post({ input, model: "route-" + input });
     for (const previous_response_id of ["resp-second", "resp-first", "unrelated", "resp-first"]) {
       await post({ previous_response_id, input: [{ type: "function_call_output", call_id: "same-id", output: "Error: unavailable" }] });
     }
+    await post({ model: "explicit-route", previous_response_id: "resp-first",
+      input: [{ type: "function_call_output", call_id: "same-id", output: "Error: unavailable" }] });
     expect(queries).toEqual(["second", "first"]);
-    expect(outputs.map(output => output.includes(source.url))).toEqual([true, true, false, true]);
+    expect(outputs.map(item => item.model)).toEqual(["route-second", "route-first", undefined, "route-first", "explicit-route"]);
+    expect(outputs.map(item => item.output.includes(source.url))).toEqual([true, true, false, true, true]);
   } finally {
     relay.close();
     server.closeAllConnections();

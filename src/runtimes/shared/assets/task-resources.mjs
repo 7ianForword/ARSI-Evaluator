@@ -49,13 +49,16 @@ export function nativeSearchFallback(url, serverName, record, nativeBackend = "n
   const supplementary = new Set(["mcp__" + serverName + "__web_search", serverName + "_web_search"]);
   const completed = new Map();
   const recorded = new Set();
-  const responseCalls = new Map();
+  const pendingResponses = new Map();
   return async (payload, signal) => {
     const nameOf = tool => tool?.function?.name ?? tool?.name;
     if (!payload.previous_response_id && Array.isArray(payload.tools) && payload.tools.some(tool => nativeTool.test(nameOf(tool)))) {
       payload.tools = payload.tools.filter(tool => !supplementary.has(nameOf(tool)));
     }
-    const calls = new Map(responseCalls.get(payload.previous_response_id));
+    const previous = pendingResponses.get(payload.previous_response_id);
+    // Some gateways require the original model alias to route an output-only continuation.
+    if (payload.model === undefined && previous?.model !== undefined) payload.model = previous.model;
+    const calls = new Map(previous?.calls);
     const remember = (id, name, args) => {
       if (!id) return;
       calls.delete(id);
@@ -145,7 +148,7 @@ export function nativeSearchFallback(url, serverName, record, nativeBackend = "n
       for (const item of result.output ?? []) {
         if (item.type === "function_call") remember(item.call_id, item.name, item.arguments);
       }
-      if (calls.size) responseCalls.set(result.id, new Map(calls));
+      if (calls.size) pendingResponses.set(result.id, { model: payload.model, calls: new Map(calls) });
     };
   };
 }

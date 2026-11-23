@@ -1,5 +1,13 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { createInterface } from "node:readline";
+
+// Ask the CLI to resolve its own config layers and project trust rules.
+export async function configuredMcpNames(executable, prefix, env, settings) {
+  const { stdout } = await promisify(execFile)(executable, [...prefix, "mcp", "list", "--json", ...settings],
+    { env, timeout: 20_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+  return JSON.parse(stdout).map(server => server.name);
+}
 
 // Both CLIs discover bundled and project skills themselves and accept only
 // per-path exclusions. Query the same installation and attempt HOME used by exec.

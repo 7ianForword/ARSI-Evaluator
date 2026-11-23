@@ -59,7 +59,7 @@ export function sessionToolPolicy<T extends SolverToolPolicy>(solver: string, po
   if (policy.webFetch === "enabled" && (network === "none" || network === "model-api")) {
     unsupportedToolPolicy(solver, `webFetch: enabled conflicts with task network ${network} because the solve environment cannot request public web pages.`);
   }
-  return { ...policy, webSearch: "disabled" };
+  return { ...policy, webSearch: "disabled", ...(network === "none" || network === "model-api" ? { webFetch: "disabled" } : {}) };
 }
 
 export function parseWebToolNames(value: Record<string, unknown>, path: string, policy: SolverToolPolicy): WebToolNames {

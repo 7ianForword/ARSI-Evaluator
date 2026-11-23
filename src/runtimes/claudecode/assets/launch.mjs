@@ -17,7 +17,9 @@ try {
   if (policy.mcp !== "disabled" && input.mcpServers?.length) {
     args.push("--mcp-config", JSON.stringify(nativeMcpConfig(input.mcpServers)));
   }
-  const settings = { sandbox: { enabled: false } };
+  const root = process.platform === "linux" && process.getuid() === 0;
+  args.push("--permission-mode", root ? "dontAsk" : "bypassPermissions");
+  const settings = { sandbox: { enabled: false }, ...(root ? { permissions: { allow: ["*"] } } : {}) };
   // Fetch uses the task's network policy without a separate call to Anthropic's domain service.
   if (policy.tools !== "none" && policy.webFetch !== "disabled") settings.skipWebFetchPreflight = true;
   if (policy.tools !== "none" && policy.webSearch !== "disabled") {

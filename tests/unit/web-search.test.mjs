@@ -1,4 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { createServer } from "node:http";
+import { text } from "node:stream/consumers";
+import { startModelRelay } from "../../src/runtimes/shared/assets/model-relay.mjs";
 import { searchWeb } from "../../src/infrastructure/network/web-search.mjs";
 import { nativeSearchFallback, taskServers } from "../../src/runtimes/shared/assets/task-resources.mjs";
 import { fetchWebPage } from "../../src/runtimes/codex/assets/web-fetch.mjs";
@@ -97,6 +100,15 @@ test.each([
     .rejects.toEqual(Error("model-service: HTTP " + status + ": " + reason));
 });
 
+test("project and task MCP names are both reserved for supplementary search", async () => {
+  const task = { name: "evaluator-search-fallback", transport: "http", url: "http://localhost/task" };
+  const resources = await taskServers({ mcpServers: [task] }, false, undefined, async () => ["evaluator-search"]);
+  try {
+    expect(resources.servers.map(server => server.name)).toEqual([task.name, "evaluator-search-fallback-fallback"]);
+    expect(resources.servers[0]).toEqual(task);
+  } finally { resources.close(); }
+});
+
 test("restricted attempts never start the supplementary MCP search server", async () => {
   const server = { name: "task", url: "http://localhost/task", transport: "http" };
   for (const toolPolicy of [{ mcp: "disabled" }, { tools: "none", mcp: "disabled" }]) {
@@ -138,6 +150,52 @@ test.each([
   await nativeSearchFallback("http://localhost/fixture", "evaluator-search")(request, signal);
   expect(JSON.stringify(request)).toContain(source.url);
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])("Responses continuation falls back using the model-emitted call (stream=%s)", async stream => {
+  const queries = [];
+  const outputs = [];
+  const server = createServer(async (req, res) => {
+    const body = JSON.parse(await text(req));
+    if (req.url === "/search") {
+      queries.push(body.params.arguments.query);
+      res.end(JSON.stringify({ result: { content: [{ text: JSON.stringify({ backend: "exa", results: [source] }) }] } }));
+      return;
+    }
+    if (body.previous_response_id) outputs.push(body.input[0].output);
+    const item = { type: "function_call", call_id: "same-id", name: "web_search", arguments: JSON.stringify({ query: body.input }) };
+    const result = { object: "response", id: "resp-" + (body.previous_response_id ?? body.input), output: body.previous_response_id ? [] : [item] };
+    if (stream) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      for (const output of result.output) res.write("data: " + JSON.stringify({ type: "response.output_item.done", item: output }) + "\n\n");
+      res.end("data: " + JSON.stringify({ type: "response.completed", response: { ...result, output: [] } }) + "\n\n");
+    } else {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(result));
+    }
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + server.address().port;
+  const relay = await startModelRelay({ api: "openai-responses", baseUrl: base, apiKey: "fixture", token: "test",
+    completeSearch: nativeSearchFallback(base + "/search", "evaluator-search") });
+  try {
+    const post = async payload => {
+      const reply = await fetch(relay.endpoint + "/responses", { method: "POST", headers: { authorization: "Bearer test" },
+        body: JSON.stringify({ stream, ...payload }) });
+      expect(reply.status).toBe(200);
+      await reply.text();
+    };
+    for (const input of ["first", "second"]) await post({ input });
+    for (const previous_response_id of ["resp-second", "resp-first", "unrelated", "resp-first"]) {
+      await post({ previous_response_id, input: [{ type: "function_call_output", call_id: "same-id", output: "Error: unavailable" }] });
+    }
+    expect(queries).toEqual(["second", "first"]);
+    expect(outputs.map(output => output.includes(source.url))).toEqual([true, true, false, true]);
+  } finally {
+    relay.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test("per-query domain restrictions never reach an unrestricted fallback", async () => {

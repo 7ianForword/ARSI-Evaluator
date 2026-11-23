@@ -763,18 +763,20 @@ describe("simpleagent bundle", () => {
     expect(JSON.stringify(requests)).toContain("demo_bundle_echo");
   }, 30_000);
 
-  test("task-declared SSE MCP tools are present before model execution and close on completion", async () => {
+  test("tools: none keeps a task MCP web alias callable and closes the connection", async () => {
     await stubWindowsShell();
     const mcp = await taskMcpServer();
     const attemptPaths = await paths("task-mcp");
     try {
       const input = projectRunnerInput({ key: { runId: "run", taskId: "mcp", attemptId: "one" },
-        input: { id: "mcp", prompt: "complete alpha", mcpServers: [{ name: "task", transport: "sse", url: mcp.url }] },
+        input: { id: "mcp", prompt: "call the task MCP", mcpServers: [{ name: "task", transport: "sse", url: mcp.url }] },
+        toolAccess: { tools: "none", webSearchTools: ["mcp__task__echo"] },
         model: { name: "fixture-model", endpoint, provider: null, api: "openai-completions" },
         auth: { value: "key-task-mcp", reference: null }, workdir: root, outputDir: attemptPaths.agent });
       expect((await run(input)).finalText).toBe("Answer: alpha");
       const requests = (await readFile(statePath, "utf8")).trim().split("\n").map(line => JSON.parse(line)).filter(request => request.authorization === "Bearer key-task-mcp");
-      expect(JSON.stringify(requests)).toContain("mcp__task__echo");
+      expect(requests[0].body.tools.map((tool: { function: { name: string } }) => tool.function.name)).toContain("mcp__task__echo");
+      expect(requests[1].body.messages).toContainEqual(expect.objectContaining({ role: "tool", content: expect.stringContaining("task-mcp-called") }));
       expect(mcp.activeConnections()).toBe(0);
     } finally { await mcp.close(); }
   }, 40_000);

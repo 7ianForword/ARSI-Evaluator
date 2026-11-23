@@ -37,9 +37,9 @@ Benchmark 决定任务和评分，Solver 决定模型请求或 Agent 怎样执�
 
 `tools: none` 可以和 `mcp: disabled` 或任一网页字段的 `disabled` 同用。它与 `webSearch: enabled`、`webFetch: enabled` 分别冲突，因为关闭内置工具也会关闭搜索和抓取。若要使用网页工具，省略 `tools`；若要只保留自行声明的 MCP，省略两个网页字段。
 
-任务网络为 `none` 或 `model-api` 时，显式开启搜索或抓取会报错。域名白名单允许抓取名单内的地址；当前公共搜索后端无法遵守相同名单，显式开启搜索会报错。未显式开启搜索时，评测器按任务网络关闭不允许的搜索。
+任务网络为 `none` 或 `model-api` 时，默认关闭 WebSearch 和 WebFetch，显式开启任一项会报配置错误。域名白名单允许抓取名单内的地址。当前公共搜索后端无法遵守相同名单，因此白名单任务默认关闭搜索，显式开启会报错。
 
-local 中的文件和 Shell 操作使用当前操作系统用户的权限，可以写任务目录之外该用户有权写入的路径。Docker 保留指定的用户、挂载和网络策略。Claude Code 2.1.322 在 Linux root 下拒绝启动免审批模式。CodeBuddy 为主 Agent 和子 Agent 分别设置免审批。
+local 中的文件和 Shell 操作使用当前操作系统用户的权限，可以写任务目录之外该用户有权写入的路径。Docker 保留指定的用户、挂载和网络策略。CodeBuddy 为主 Agent 和子 Agent 分别设置免审批。
 
 网络允许时，保留原生搜索。Claude 通过 WebSearch 结果钩子、DSH 通过搜索服务钩子，在原生工具没有来源时自动查询 Exa，再尝试当前模型服务。支持模型函数调用的 CLI 还可在下一次请求中匹配原生调用及其结果，自动用补充 MCP 的结果补全失败的查询。在原生函数和补充工具同时可用时优先原生函数。仅暴露厂商托管搜索、没有可配对工具结果的 CLI 仍由 Harness 或模型选择补充工具。OpenCode 的原生 websearch 使用 Exa，回退时直接查询模型服务。Pi 通过扩展工具搜索，Claude 和 Pi 在单独关闭 MCP 后仍有搜索接入方式。
 
@@ -218,7 +218,7 @@ output:
 
 ## 使用 Claude Code
 
-Claude Code 默认开放原生 WebFetch，主 Agent 和子 Agent 都可以读取网页正文。省略 `webFetch` 或设置为 `enabled` 时，Evaluator 为本次运行设置 `skipWebFetchPreflight`，跳过 Anthropic 的域名安全名单查询。网页请求仍受任务网络规则约束。`webFetch: disabled` 关闭原生抓取，`tools: none` 会连同其他内置工具一起关闭抓取。
+当任务网络允许抓取时，Claude Code 默认向主 Agent 和子 Agent 开放原生 WebFetch，并设置 `skipWebFetchPreflight` 跳过 Anthropic 的域名安全名单查询。任务使用 `none`、`model-api` 网络，或配置 `webFetch: disabled`、`tools: none` 时，会移除 WebFetch。
 
 Evaluator 在本机和 Docker 中安装固定版本的 Claude Code `2.1.322`。保存以下实验配置，设置 `CLAUDE_MODEL`、`CLAUDE_ENDPOINT` 和 `CLAUDE_API_KEY` 后运行。
 
@@ -242,7 +242,7 @@ output:
 ```
 
 - `base_url` 填 API 基址。Claude Code 会在该地址下请求 `/v1/messages`，通过 `x-api-key` 传递认证。Anthropic 原生服务可填 `https://api.anthropic.com`，DeepSeek 兼容服务可填 `https://api.deepseek.com/anthropic`。
-- Claude 启动时关闭自带沙箱，使用 `--permission-mode bypassPermissions`。本机和 Docker 都开放 Bash，命令按宿主机或容器进程的权限执行。Windows 需要安装 Git for Windows。如果 Claude Code 找不到 Git Bash，将 `CLAUDE_CODE_GIT_BASH_PATH` 设置为对应的 `bash.exe` 路径。
+- Claude 启动时关闭自带沙箱。Linux UID 0 使用 `dontAsk` 并自动允许已开放的工具，其他用户使用 `bypassPermissions`。两种模式都遵守显式禁用的工具配置。本机和 Docker 都开放 Bash，命令按宿主机或容器进程的权限执行。Windows 需要安装 Git for Windows。如果 Claude Code 找不到 Git Bash，将 `CLAUDE_CODE_GIT_BASH_PATH` 设置为对应的 `bash.exe` 路径。
 - Linux 运行时通过仅供当前 attempt 使用的本地转发器访问模型，Bash 启动时会清除转发凭据。
 - 图片和 PDF 页图需要在模型服务的 `inputModalities` 声明 `image`。原生 PDF 需要声明 `pdf`，并使用接收 `document` 内容块的 Messages 服务。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 - 服务字段 `maxTokens` 传给 Claude Code 的输出用量设置，`contextWindow` 设置自动压缩阈值，允许 100000 到 1000000 token。此 Solver 不接受 `retry`。事件、轨迹和 stderr 保存在每次 attempt 的 `agent/` 目录。

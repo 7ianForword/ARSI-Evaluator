@@ -1,4 +1,4 @@
-import { disabledSkillConfig } from "./codex-skill-config.mjs";
+import { configuredMcpNames, disabledSkillConfig } from "./codex-skill-config.mjs";
 import { stageSkills, taskServers } from "./runtimes/shared/assets/task-resources.mjs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -18,7 +18,11 @@ let relay;
 let resources;
 try {
   const policy = input.toolPolicy ?? {};
-  resources = await taskServers(input);
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: home, TRAE_HOME: home, EVALUATOR_TRAE_API_KEY: apiKey };
+  const project = args.find(arg => arg.startsWith("projects="));
+  const settings = project ? ["-c", project] : [];
+  const configuredNames = () => configuredMcpNames(entry, [], env, settings);
+  resources = await taskServers(input, false, undefined, configuredNames);
   for (const { name, url, transport } of resources.servers) {
     if (transport !== "http") throw Error("This CLI requires streamable HTTP for task MCP");
     if (!/^[a-zA-Z0-9_-]+$/u.test(name)) throw Error("Unsupported MCP server name: " + name);
@@ -30,7 +34,6 @@ try {
   const images = await stageAttachments(home, media);
   if (images.length) args.splice(-1, 0, ...images.map(path => `--image=${path}`));
   // Docker passes CommandSpec.env in docker exec arguments, so receive the key over stdin.
-  const env = { ...process.env, HOME: home, USERPROFILE: home, TRAE_HOME: home, CODEX_HOME: home, EVALUATOR_TRAE_API_KEY: apiKey };
   if (modelRelay || resources.completeSearch) {
     const token = randomUUID();
     relay = await startModelRelay({ api: input.api, baseUrl: input.baseUrl, ...modelRelay, completeSearch: resources.completeSearch, apiKey, token });
@@ -42,8 +45,7 @@ try {
     env.PATH = [join(root, "traecli-resources"), process.env.PATH].filter(Boolean).join(delimiter);
   }
   if (policy.skills === "disabled") {
-    const project = args.find(arg => arg.startsWith("projects="));
-    const config = await disabledSkillConfig(entry, [], env, project ? ["-c", project] : []);
+    const config = await disabledSkillConfig(entry, [], env, settings);
     args.splice(-1, 0, "-c", config);
   }
   const cli = spawn(entry, args, { env, stdio: ["pipe", "inherit", "inherit"], windowsHide: true });

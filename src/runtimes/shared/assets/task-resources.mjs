@@ -21,13 +21,14 @@ export async function stageSkills(directories, destination) {
   }
 }
 
-export async function taskServers(input, skipExa = false, fetchPage) {
+export async function taskServers(input, skipExa = false, fetchPage, configuredNames) {
   const policy = input.toolPolicy ?? {};
   if (policy.mcp === "disabled") return { servers: [] };
   const servers = [...(input.mcpServers ?? [])];
   if (policy.tools === "none" || policy.webSearch === "disabled" && !fetchPage) return { servers };
+  const reserved = new Set([...servers.map(server => server.name), ...(configuredNames ? await configuredNames() : [])]);
   let name = "evaluator-search";
-  while (servers.some(server => server.name === name)) name += "-fallback";
+  while (reserved.has(name)) name += "-fallback";
   const record = input.outputDir ? async event => {
     await mkdir(input.outputDir, { recursive: true });
     const fetch = event.backend === "http-fetch";
@@ -48,14 +49,17 @@ export function nativeSearchFallback(url, serverName, record, nativeBackend = "n
   const supplementary = new Set(["mcp__" + serverName + "__web_search", serverName + "_web_search"]);
   const completed = new Map();
   const recorded = new Set();
+  const responseCalls = new Map();
   return async (payload, signal) => {
     const nameOf = tool => tool?.function?.name ?? tool?.name;
     if (!payload.previous_response_id && Array.isArray(payload.tools) && payload.tools.some(tool => nativeTool.test(nameOf(tool)))) {
       payload.tools = payload.tools.filter(tool => !supplementary.has(nameOf(tool)));
     }
-    const calls = new Map();
+    const calls = new Map(responseCalls.get(payload.previous_response_id));
     const remember = (id, name, args) => {
-      if (!id || !nativeTool.test(name)) return;
+      if (!id) return;
+      calls.delete(id);
+      if (!nativeTool.test(name)) return;
       if (typeof args === "string") {
         try { args = JSON.parse(args); } catch { return; }
       }
@@ -125,8 +129,24 @@ export function nativeSearchFallback(url, serverName, record, nativeBackend = "n
     }
     for (const item of Array.isArray(payload.input) ? payload.input : []) {
       if (item.type === "function_call") remember(item.call_id, item.name, item.arguments);
-      else if (item.type === "function_call_output") await complete(item, "output", item.call_id, false);
+      else if (item.type === "function_call_output") {
+        await complete(item, "output", item.call_id, false);
+        calls.delete(item.call_id);
+      }
     }
+    // Responses clients can send only an output on the next HTTP request.
+    // Associate model-emitted calls with their response so parallel agents stay independent.
+    return event => {
+      if (event.type === "response.output_item.done" && event.item?.type === "function_call") {
+        remember(event.item.call_id, event.item.name, event.item.arguments);
+      }
+      const result = event.response ?? event;
+      if (!result.id || !(event.type === "response.completed" || event.object === "response")) return;
+      for (const item of result.output ?? []) {
+        if (item.type === "function_call") remember(item.call_id, item.name, item.arguments);
+      }
+      if (calls.size) responseCalls.set(result.id, new Map(calls));
+    };
   };
 }
 

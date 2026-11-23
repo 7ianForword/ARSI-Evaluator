@@ -353,17 +353,16 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
   const tools = noTools ? [] : [shell, "read", "write", "edit"];
   const useSearch = !noTools && access.webSearch !== "disabled" && !access.webSearchTools?.length;
   if (useSearch) tools.push("web_search");
-  const excluded: string[] = noTools ? ["web_search", "web_fetch", ...(access.webSearchTools ?? []), ...(access.webFetchTools ?? [])] : [];
+  const excluded: string[] = [];
   const required: { option: string; tool: string }[] = [];
-  if (!noTools) {
-    for (const [key, names] of [["webSearch", access.webSearchTools], ["webFetch", access.webFetchTools]] as const) {
-      const mode = access[key];
-      if (mode === undefined || mode === "default") continue;
-      if (key === "webSearch" && useSearch) continue;
-      const toolNames = names ?? [key === "webSearch" ? "web_search" : "web_fetch"];
-      if (mode === "enabled") required.push(...toolNames.map(tool => ({ option: key, tool })));
-      else excluded.push(...toolNames);
-    }
+  for (const [key, aliases, builtin] of [["webSearch", access.webSearchTools, "web_search"], ["webFetch", access.webFetchTools, "web_fetch"]] as const) {
+    const mode = access[key];
+    if (noTools) {
+      // Pi registers declared MCP tools in the mcp__ namespace.
+      excluded.push(builtin, ...(aliases ?? []).filter(name => !name.startsWith("mcp__") || access.mcp === "disabled" || mode === "disabled"));
+    } else if (mode === "enabled" && !(key === "webSearch" && useSearch)) {
+      required.push(...(aliases ?? [builtin]).map(tool => ({ option: key, tool })));
+    } else if (mode === "disabled") excluded.push(...(aliases ?? [builtin]));
   }
   const systemPrompt = noTools ? SYSTEM_PROMPT : `${SYSTEM_PROMPT} The command tool is ${shell}; use ${shell === "powershell" ? "PowerShell" : "Bash"} syntax for commands.`;
   await mkdir(input.outputDir, { recursive: true });

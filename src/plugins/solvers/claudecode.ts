@@ -90,7 +90,6 @@ export class ClaudeCodeSolver implements Solver {
         args: [path(runtime.root, "launch.mjs"), home, path(runtime.root, CLAUDE_CODE_ENTRY),
           "--print", "--verbose", "--output-format", "stream-json", "--no-session-persistence",
           ...(maxTurns === undefined ? [] : ["--max-turns", String(maxTurns)]),
-          "--permission-mode", "bypassPermissions",
           ...(none ? ["--tools", ""] : []),
           ...(policy.skills === "disabled" ? ["--disable-slash-commands"] : []),
           ...(policy.mcp === "disabled" ? ["--strict-mcp-config"] : []),

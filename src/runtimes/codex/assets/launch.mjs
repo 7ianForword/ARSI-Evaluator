@@ -1,4 +1,4 @@
-import { disabledSkillConfig } from "./codex-skill-config.mjs";
+import { configuredMcpNames, disabledSkillConfig } from "./codex-skill-config.mjs";
 import { stageSkills, taskServers } from "./runtimes/shared/assets/task-resources.mjs";
 import { startModelRelay } from "./runtimes/shared/assets/model-relay.mjs";
 import { randomUUID } from "node:crypto";
@@ -17,10 +17,14 @@ let resources;
 let relay;
 try {
   const policy = input.toolPolicy ?? {};
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: home, EVALUATOR_CODEX_API_KEY: apiKey };
+  const project = args.find(arg => arg.startsWith("projects="));
+  const settings = project ? ["-c", project] : [];
+  const configuredNames = () => configuredMcpNames(process.execPath, [entry], env, settings);
   const fetchAllowed = policy.tools !== "none" && policy.webFetch !== "disabled" && policy.mcp !== "disabled"
     && input.fetchNetwork !== "model-api" && input.fetchNetwork !== "none";
   resources = await taskServers({ ...input, exaOnly: policy.webFetch === "disabled" }, false,
-    fetchAllowed ? (url, signal) => fetchWebPage(url, input.fetchNetwork?.allowedHosts, signal) : undefined);
+    fetchAllowed ? (url, signal) => fetchWebPage(url, input.fetchNetwork?.allowedHosts, signal) : undefined, configuredNames);
   for (const { name, url, transport } of resources.servers) {
     if (transport !== "http") throw Error("This CLI requires streamable HTTP for task MCP");
     if (!/^[a-zA-Z0-9_-]+$/u.test(name)) throw Error("Unsupported MCP server name: " + name);
@@ -41,10 +45,10 @@ try {
   // Docker's process adapter places CommandSpec.env in docker exec arguments.
   // Receive the credential over stdin and set it only in the Codex process.
   const noProxy = [process.env.NO_PROXY ?? process.env.no_proxy, "127.0.0.1"].filter(Boolean).join(",");
-  const env = { ...process.env, ...(relay ? { NO_PROXY: noProxy, no_proxy: noProxy } : {}), HOME: home, USERPROFILE: home, CODEX_HOME: home, EVALUATOR_CODEX_API_KEY: cliToken };
+  if (relay) env.NO_PROXY = env.no_proxy = noProxy;
+  env.EVALUATOR_CODEX_API_KEY = cliToken;
   if (policy.skills === "disabled") {
-    const project = args.find(arg => arg.startsWith("projects="));
-    const config = await disabledSkillConfig(process.execPath, [entry], env, project ? ["-c", project] : []);
+    const config = await disabledSkillConfig(process.execPath, [entry], env, settings);
     args.splice(-1, 0, "-c", config);
   }
   const cli = spawn(process.execPath, [entry, ...args], {

@@ -37,9 +37,9 @@ All rows accept the six fields and values listed above. “Yes” means the harn
 
 `tools: none` is compatible with `mcp: disabled` and either web field set to `disabled`. It conflicts with `webSearch: enabled` and `webFetch: enabled` because disabling built-ins disables both web tools. Omit `tools` to enable a web tool. Omit both web fields to keep only explicitly declared MCP tools.
 
-With task network `none` or `model-api`, explicitly enabling search or fetch produces an error. A domain allowlist permits fetching allowed URLs. The available public search backends cannot enforce the same allowlist, so explicit search is rejected. With search left at its default, the evaluator disables it on restricted networks.
+Task networks `none` and `model-api` disable both WebSearch and WebFetch by default. Explicitly enabling either tool reports a configuration error. A domain allowlist permits fetching allowed URLs. Public search is disabled on allowlisted networks because the available search backends cannot enforce the same domain list.
 
-Local file and shell operations run with the operating system user's permissions, including writable paths outside the task directory. Docker retains its configured user, mounts and network policy. Claude Code 2.1.322 rejects permission bypass as root on Linux. CodeBuddy configures bypass for both the parent and child.
+Local file and shell operations run with the operating system user's permissions, including writable paths outside the task directory. Docker retains its configured user, mounts and network policy. CodeBuddy configures bypass for both the parent and child.
 
 On unrestricted networks Claude's WebSearch result hook and DSH's search service try Exa when native search returns no sources. Exa failures fall back to hosted search on the selected model endpoint. For CLIs that return an identifiable model function call and tool result, the relay supplies supplementary MCP results on the next model turn. The native function has priority when both tools are declared. With hosted search or an opaque tool result, the CLI or model can still choose the supplementary tool. OpenCode's native websearch uses Exa, so its fallback goes directly to the model service. Claude and Pi support search independently of MCP.
 
@@ -218,7 +218,7 @@ output:
 
 ## Claude Code
 
-Claude Code enables native WebFetch by default for the main agent and subagents. Omitting `webFetch` or setting it to `enabled` applies `skipWebFetchPreflight` for that attempt, so fetching a page skips Anthropic's domain safety lookup. The Environment enforces task network access. Set `webFetch: disabled` to turn off native fetch or `tools: none` to disable it along with the other built-in tools.
+When task networking permits fetching, Claude Code enables native WebFetch for the main agent and subagents. The launcher sets `skipWebFetchPreflight` for those attempts to skip Anthropic’s domain safety lookup. Task networks `none` and `model-api`, `webFetch: disabled`, and `tools: none` all remove WebFetch.
 
 Evaluator installs Claude Code `2.1.322` for local and Docker tasks. Save this experiment YAML and set `CLAUDE_MODEL`, `CLAUDE_ENDPOINT`, and `CLAUDE_API_KEY` before running it.
 
@@ -242,7 +242,7 @@ output:
 ```
 
 - Set `base_url` to the API base. Claude Code sends requests to `/v1/messages` under that base and authenticates via `x-api-key`. Use `https://api.anthropic.com` for Anthropic or `https://api.deepseek.com/anthropic` for DeepSeek's compatible API.
-- Claude starts with its sandbox disabled and `--permission-mode bypassPermissions`. Bash is available locally and in Docker, and it runs with the permissions of the host or container process. On Windows, install Git for Windows and set `CLAUDE_CODE_GIT_BASH_PATH` to its `bash.exe` if Claude Code cannot find it.
+- Claude disables its internal sandbox. Linux UID 0 uses `dontAsk` with an allow rule for available tools. Other users run with `bypassPermissions`. Explicit tool exclusions apply in both modes. Bash is available locally and in Docker, and it runs with the permissions of the host or container process. On Windows, install Git for Windows and set `CLAUDE_CODE_GIT_BASH_PATH` to its `bash.exe` if Claude Code cannot find it.
 - On Linux, the runtime sends model requests through an attempt-local relay and clears its temporary credentials from Bash's environment.
 - For images and PDF pages, declare `image` in the service's `inputModalities`. For native PDFs, declare `pdf` and use a Messages endpoint that accepts document content blocks. See [image and PDF evaluations](multimodal.md).
 - `maxTokens` sets Claude Code's output token setting, and `contextWindow` sets the auto-compaction window between 100000 and 1000000 tokens. The solver rejects `retry`. Each attempt saves events, the trajectory, and stderr under `agent/`.

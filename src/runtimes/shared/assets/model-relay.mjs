@@ -105,6 +105,7 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
       }
       let body = request;
       let guard;
+      let observeSearchResponse;
       if (disableBuiltinTools || disableHostedSearch || disableWebFetch || completeSearch || (route !== "/messages/count_tokens" && (reasoningEffort !== undefined || maxTokens !== undefined))) {
         let payload = JSON.parse(await text(request));
         if (reasoningEffort !== undefined && route !== "/messages/count_tokens") payload = applyReasoningEffort(payload, api, reasoningEffort);
@@ -133,7 +134,8 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
           if (blocked(payload.function_call)) delete payload.function_call;
         }
         if (completeSearch && !disableBuiltinTools && !disableHostedSearch && route !== "/messages/count_tokens") {
-          await completeSearch(payload, controller.signal);
+          const observe = await completeSearch(payload, controller.signal);
+          if (api === "openai-responses") observeSearchResponse = observe;
         }
         body = JSON.stringify(payload);
       }
@@ -147,13 +149,16 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
         if (counted) modelCalls--;
         throw error;
       }
-      if (counted && !upstream.ok) modelCalls--;
+      if (!upstream.ok) {
+        if (counted) modelCalls--;
+        observeSearchResponse = undefined;
+      }
       for (const name of responseHeaders) {
         const value = upstream.headers.get(name);
         if (value !== null) response.setHeader(name, value);
       }
       response.writeHead(upstream.status);
-      if (upstream.body && (guard || captureUsage) && upstream.headers.get("content-type")?.includes("text/event-stream")) {
+      if (upstream.body && (guard || captureUsage || observeSearchResponse) && upstream.headers.get("content-type")?.includes("text/event-stream")) {
         let pending = "";
         const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
         let usage;
@@ -173,6 +178,7 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
           if (!data || data === "[DONE]") return;
           let event;
           try { event = JSON.parse(data); } catch (error) { if (guard) throw error; return; }
+          observeSearchResponse?.(event);
           if (guard?.inspect(event)) held ??= [];
           const current = event.usage ?? event.message?.usage ?? event.response?.usage;
           if (current) usage = { ...usage, ...current };
@@ -202,10 +208,12 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
         });
         await pipeline(upstream.body, inspector, response, { signal: controller.signal });
       }
-      else if (upstream.body && guard && upstream.headers.get("content-type")?.includes("application/json")) {
+      else if (upstream.body && (guard || observeSearchResponse) && upstream.headers.get("content-type")?.includes("application/json")) {
         const payload = await upstream.text();
-        guard.inspect(JSON.parse(payload));
-        guard.finish();
+        const event = JSON.parse(payload);
+        observeSearchResponse?.(event);
+        guard?.inspect(event);
+        guard?.finish();
         response.end(payload);
       }
       else if (upstream.body) await pipeline(upstream.body, response, { signal: controller.signal });

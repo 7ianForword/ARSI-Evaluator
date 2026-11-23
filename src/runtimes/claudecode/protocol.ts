@@ -28,8 +28,8 @@ export function consumeClaudeCode(
     label: "Claude Code",
     accept(event) {
       if (event.type === "assistant" || event.type === "user") context.activity?.({});
-      if (event.type === "system" && event.subtype === "init" && typeof event.permissionMode === "string" && event.permissionMode !== "bypassPermissions") {
-        unsupportedToolPolicy("claudecode", `CLI selected ${event.permissionMode} instead of the requested bypassPermissions mode`);
+      if (event.type === "system" && event.subtype === "init" && typeof event.permissionMode === "string" && !["dontAsk", "bypassPermissions"].includes(event.permissionMode)) {
+        unsupportedToolPolicy("claudecode", `CLI selected unexpected permission mode ${event.permissionMode}`);
       }
       if (requiredWebTools.length && event.type === "system" && event.subtype === "init") {
         const tools = Array.isArray(event.tools) ? event.tools : [];

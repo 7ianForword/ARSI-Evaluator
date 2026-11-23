@@ -73,7 +73,8 @@ test("AgentBundle and Pi runner preserve policy and exact external tool names", 
 test("solve network prevents both external search and provider-hosted search", () => {
   for (const network of ["none", "model-api", ["docs.example.org"]] as const) {
     const solveNetwork = typeof network === "string" ? network : { kind: "allowlist" as const, allowedHosts: [...network] };
-    expect(sessionToolPolicy("codex", { mcp: "disabled" }, { solveNetwork })).toEqual({ mcp: "disabled", webSearch: "disabled" });
+    expect(sessionToolPolicy("codex", { mcp: "disabled" }, { solveNetwork })).toEqual({ mcp: "disabled", webSearch: "disabled",
+      ...(typeof solveNetwork === "string" ? { webFetch: "disabled" } : {}) });
     expect(() => sessionToolPolicy("codex", { webSearch: "enabled" }, { solveNetwork })).toThrow(/network/u);
   }
   for (const solveNetwork of ["none", "model-api"] as const) {

@@ -1,6 +1,7 @@
 import { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../../../core/validation/input.js";
 import type { Usage } from "../../../../../core/contracts/result.js";
 import { parseTelemetry, type AgentXTelemetry } from "./telemetry.js";
+import { parseMsprofSummary, type MsprofSummary } from "./msprof-telemetry.js";
 import { parseNetworkLatencyConfig, parseNetworkLatencyProbes, type AgentXNetworkLatencyConfig, type AgentXNetworkLatencyProbes } from "./network-latency.js";
 
 import { AGENTX_VERSION } from "../../../../../runtimes/agentx/versions.js";
@@ -117,6 +118,7 @@ export type AgentXSummary = {
   incomparableReasons: string[];
   replayCoverage?: AgentXReplayCoverage;
   telemetry?: AgentXTelemetry;
+  msprof?: MsprofSummary;
   networkLatency?: AgentXNetworkLatencySummary;
 };
 
@@ -266,6 +268,7 @@ export function parseAgentXSummary(value: unknown): AgentXSummary {
     comparable: raw.comparable, incomparableReasons,
     ...(workload.mode === "replay" ? { replayCoverage: parseReplayCoverage(raw.replayCoverage, workload) } : {}),
     ...(raw.telemetry === undefined ? {} : { telemetry: parseTelemetry(raw.telemetry) }),
+    ...(raw.msprof === undefined ? {} : { msprof: parseMsprofSummary(raw.msprof) }),
     ...(networkLatency === undefined ? {} : { networkLatency }) };
 }
 

@@ -1,6 +1,6 @@
 # AgentX performance with msprof service-level profiling telemetry.
 # msprof is opt-in; requires host/toolbox with CANN msprof binary.
-# See docs/design/2026-11-17/2026-11-17-msprof-service-profiling-applicability.md
+# See docs/design/2026-11-24/msprof-service-profiling-applicability.md
 services:
   default:
     model: ${MODEL_NAME}

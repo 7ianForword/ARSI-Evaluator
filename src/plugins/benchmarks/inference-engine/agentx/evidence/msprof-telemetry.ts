@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { agentXAssets } from "../../../../../runtimes/agentx/runtime.js";
 import { expectRecord, rejectUnknown } from "../../../../../core/validation/input.js";
 
 /** msprof service-level profiling config (opt-in, alongside vllm/ascend telemetry). */
@@ -18,6 +20,7 @@ export type MsprofConfig = {
 export type MsprofSummary = {
   schemaVersion: 1;
   kind: "profiling-summary";
+  requestedDevices?: number[];
   aggregate: { device_count: number; mac_fp16_ratio_mean: number | null };
   devices: Record<string, { mac_fp16_ratio: number; mac_int8_ratio: number | null; samples: number }>;
   availability: Record<string, string>;
@@ -25,7 +28,21 @@ export type MsprofSummary = {
   sqlite_devices?: Record<string, number>;
 };
 
-export type MsprofResult = { status: "completed" | "error"; summary?: MsprofSummary; window?: Record<string, unknown>; code?: string };
+export type MsprofResult = { status: "completed" | "error"; summary?: MsprofSummary; window?: Record<string, unknown>; code?: string; detail?: string };
+
+/** Stoppable collection handle; `stop` also reclaims the helper process tree. */
+export type MsprofCollection = {
+  requestedDevices: number[];
+  result: Promise<MsprofResult>;
+  stop(): Promise<void>;
+};
+
+/** Fill only missing traffic-detection fields from solver context. */
+export function resolveMsprofSettings(config: MsprofConfig, inferredMetricsUrl?: string): MsprofConfig {
+  if (config.metricsUrl !== undefined || inferredMetricsUrl === undefined) return config;
+  return { ...config, metricsUrl: inferredMetricsUrl,
+    ...(config.waitForTraffic === undefined ? { waitForTraffic: true } : {}) };
+}
 
 export function parseMsprofConfig(value: unknown): MsprofConfig {
   const raw = expectRecord(value, "telemetry.msprof");
@@ -62,9 +79,15 @@ export function parseMsprofConfig(value: unknown): MsprofConfig {
 
 export function parseMsprofSummary(value: unknown): MsprofSummary {
   const raw = expectRecord(value, "msprof summary");
-  rejectUnknown(raw, ["schemaVersion", "kind", "aggregate", "devices", "availability", "csv_parse_errors", "sqlite_devices"], "msprof summary");
+  rejectUnknown(raw, ["schemaVersion", "kind", "requestedDevices", "aggregate", "devices", "availability", "csv_parse_errors", "sqlite_devices"], "msprof summary");
   if (raw.schemaVersion !== 1 || raw.kind !== "profiling-summary")
     throw new TypeError("Invalid msprof summary schema");
+  if (raw.requestedDevices !== undefined) {
+    const requested = raw.requestedDevices;
+    if (!Array.isArray(requested) || !requested.length ||
+        requested.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0))
+      throw new TypeError("Invalid msprof requestedDevices");
+  }
   const aggregate = expectRecord(raw.aggregate, "msprof summary aggregate");
   rejectUnknown(aggregate, ["device_count", "mac_fp16_ratio_mean"], "msprof summary aggregate");
   if (typeof aggregate.device_count !== "number" || !Number.isSafeInteger(aggregate.device_count) || aggregate.device_count < 0)
@@ -109,17 +132,29 @@ export function parseMsprofOutput(stdout: string): MsprofResult {
   return { status: "error", code: typeof parsed.code === "string" ? parsed.code : "unknown" };
 }
 
-function helperPath(): string {
-  return fileURLToPath(new URL("./assets/msprof_service.py", import.meta.url));
+/** Helper ships with the packaged AgentX runtime assets (dist). */
+export function helperPath(): string {
+  return join(agentXAssets, "msprof_service.py");
 }
 
-/** Spawn the one-shot msprof helper; resolves when collection + parsing finishes. */
+/** Build the terminal result from helper exit state; prefers structured error JSON. */
+export function settleHelperResult(exitCode: number | null, stdout: string, stderr: string): MsprofResult {
+  const parsed = parseMsprofOutput(stdout);
+  const structural = parsed.status === "error" && !["no_output", "malformed_output"].includes(parsed.code ?? "");
+  if (exitCode === 0 || structural) return parsed;
+  const detail = stderr.replace(/\s+/gu, " ").trim().slice(0, 500);
+  return { status: "error", code: exitCode === null ? "helper_exit_unknown" : `msprof_exit_${exitCode}`,
+    ...(detail ? { detail } : {}) };
+}
+
+/** Spawn the one-shot msprof helper; `result` settles when collection + parsing finishes. */
 export function startMsprofCollection(
   config: MsprofConfig, artifacts: string, periodSec: number, signal: AbortSignal,
   pythonExecutable?: string,
-): Promise<MsprofResult> {
+): MsprofCollection {
   const helper = helperPath();
   const python = pythonExecutable ?? "python3";
+  const stopFile = join(artifacts, "msprof", "STOP");
   const helperConfig = {
     devices: config.devices.map(device => device.deviceId),
     freqHz: config.freqHz,
@@ -129,34 +164,46 @@ export function startMsprofCollection(
     ...(config.metricsUrl === undefined ? {} : { metricsUrl: config.metricsUrl }),
     ...(config.waitForTraffic === undefined ? {} : { waitForTraffic: config.waitForTraffic }),
   };
-  return new Promise((resolve) => {
-    let settled = false;
-    const settle = (value: MsprofResult) => { if (!settled) { settled = true; resolve(value); } };
-    let stdout = "", stderr = "";
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(python, ["-B", "-u", helper,
-        "--config", JSON.stringify(helperConfig), "--artifacts", artifacts],
-        { stdio: ["ignore", "pipe", "pipe"], signal, windowsHide: true });
-    } catch (error) {
-      resolve({ status: "error", code: error instanceof Error ? error.message : "spawn_failed" });
-      return;
-    }
+  let settled = false;
+  let resolveResult!: (value: MsprofResult) => void;
+  const result = new Promise<MsprofResult>(resolve => { resolveResult = resolve; });
+  const settle = (value: MsprofResult) => { if (!settled) { settled = true; resolveResult(value); } };
+  let stdout = "", stderr = "";
+  let stopped = false;
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    child = spawn(python, ["-B", "-u", helper,
+      "--config", JSON.stringify(helperConfig), "--artifacts", artifacts],
+      { stdio: ["ignore", "pipe", "pipe"], signal, windowsHide: true });
+  } catch (error) {
+    settle({ status: "error", code: error instanceof Error ? error.message : "spawn_failed" });
+  }
+  if (child) {
     child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => { stdout += chunk; if (stdout.length > 16 * 1024 * 1024) child.kill("SIGTERM"); });
+    child.stdout!.on("data", (chunk: string) => { stdout += chunk; if (stdout.length > 16 * 1024 * 1024) child!.kill("SIGTERM"); });
     child.stderr!.setEncoding("utf8");
     child.stderr!.on("data", (chunk: string) => { stderr += chunk; });
     child.on("error", (error: Error) => settle({ status: "error", code: error.message }));
     child.on("close", (code: number | null) => {
-      if (code !== 0 && code !== null) {
-        settle({ status: "error", code: `msprof_exit_${code}` });
-        return;
-      }
       try {
-        settle(parseMsprofOutput(stdout));
+        settle(settleHelperResult(code, stdout, stderr));
       } catch (error) {
         settle({ status: "error", code: error instanceof Error ? error.message : "parse_failed" });
       }
     });
-  });
+  }
+  return {
+    requestedDevices: helperConfig.devices,
+    result,
+    async stop() {
+      if (stopped || settled) return;
+      stopped = true;
+      await mkdir(join(artifacts, "msprof"), { recursive: true }).catch(() => undefined);
+      await writeFile(stopFile, `${new Date().toISOString()}\n`, "utf8").catch(() => undefined);
+      if (!settled && child?.pid) child.kill("SIGTERM");
+      const hardKill = setTimeout(() => { if (!settled) child?.kill("SIGKILL"); }, 15000);
+      hardKill.unref?.();
+      try { await result; } finally { clearTimeout(hardKill); }
+    },
+  };
 }

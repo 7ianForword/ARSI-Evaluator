@@ -119,8 +119,27 @@ export type AgentXSummary = {
   replayCoverage?: AgentXReplayCoverage;
   telemetry?: AgentXTelemetry;
   msprof?: MsprofSummary;
+  /** Persisted even when collection failed, to distinguish failure from not-enabled. */
+  msprofAttempt?: AgentXMsprofAttempt;
   networkLatency?: AgentXNetworkLatencySummary;
 };
+
+export type AgentXMsprofAttempt = {
+  requestedDevices: number[];
+  status: "completed" | "error";
+  code?: string;
+};
+
+function parseMsprofAttempt(value: unknown): AgentXMsprofAttempt {
+  const raw = expectRecord(value, "msprof attempt");
+  rejectUnknown(raw, ["requestedDevices", "status", "code"], "msprof attempt");
+  if (!Array.isArray(raw.requestedDevices) || !raw.requestedDevices.length ||
+      raw.requestedDevices.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0))
+    throw new TypeError("Invalid msprof attempt requestedDevices");
+  if (raw.status !== "completed" && raw.status !== "error") throw new TypeError("Invalid msprof attempt status");
+  if (raw.code !== undefined && typeof raw.code !== "string") throw new TypeError("Invalid msprof attempt code");
+  return raw as unknown as AgentXMsprofAttempt;
+}
 
 const fields: Record<string, { tag: string; unit: string }> = {
   ttft: { tag: "time_to_first_token", unit: "ms" },
@@ -269,6 +288,7 @@ export function parseAgentXSummary(value: unknown): AgentXSummary {
     ...(workload.mode === "replay" ? { replayCoverage: parseReplayCoverage(raw.replayCoverage, workload) } : {}),
     ...(raw.telemetry === undefined ? {} : { telemetry: parseTelemetry(raw.telemetry) }),
     ...(raw.msprof === undefined ? {} : { msprof: parseMsprofSummary(raw.msprof) }),
+    ...(raw.msprofAttempt === undefined ? {} : { msprofAttempt: parseMsprofAttempt(raw.msprofAttempt) }),
     ...(networkLatency === undefined ? {} : { networkLatency }) };
 }
 

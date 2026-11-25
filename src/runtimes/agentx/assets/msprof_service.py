@@ -18,6 +18,7 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +27,48 @@ import time
 
 SCHEMA_VERSION = 1
 SUMMARY_KIND = "profiling-summary"
+
+# Fixed CANN environment preamble; program path and arguments stay separate argv.
+CANN_ENV_LOADER = (
+    'set +e; for f in /usr/local/Ascend/ascend-toolkit/set_env.sh'
+    ' /usr/local/Ascend/cann-9.2.0/set_env.sh; do'
+    ' [ -f "$f" ] && . "$f"; done; exec "$0" "$@"'
+)
+
+_COLLECTORS = []
+
+
+def _terminate_collector(proc):
+    """Stop the collector process group, escalating from SIGTERM to SIGKILL."""
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, AttributeError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=60)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, AttributeError):
+        proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _forward_signal(signum, _frame):
+    """Forward termination to the msprof process tree, then report the abort."""
+    for proc in _COLLECTORS:
+        if proc.poll() is None:
+            _terminate_collector(proc)
+    print(json.dumps({"status": "error", "code": "aborted", "signal": int(signum)}))
+    sys.stdout.flush()
+    os._exit(1)
 
 
 class MsprofError(ValueError):
@@ -112,7 +155,7 @@ INT8_COLUMNS = ("mac_int8_ratio", "MAC INT8 Ratio")
 
 
 def parse_core_csv(path):
-    """Parse one ai_core_utilization export; returns {device_id: {mac_fp16, mac_int8}}."""
+    """Parse one ai_core_utilization export into per-device sample sums."""
     rows = _read_csv(path)
     devices = {}
     for row in rows:
@@ -128,17 +171,15 @@ def parse_core_csv(path):
             raise MsprofError("mac_fp16_ratio_out_of_range", f"{path}: {fp16_raw}")
         if int8 is not None and not 0.0 <= int8 <= 1.0:
             raise MsprofError("mac_int8_ratio_out_of_range", f"{path}: {int8_raw}")
-        entry = devices.setdefault(device_id, {"samples": 0, "fp16_sum": 0.0, "int8_sum": 0.0, "int8_count": 0})
+        entry = devices.setdefault(device_id, {"samples": 0, "fp16_sum": 0.0, "int8_samples": 0, "int8_sum": 0.0})
         entry["samples"] += 1
         entry["fp16_sum"] += fp16
         if int8 is not None:
             entry["int8_sum"] += int8
-            entry["int8_count"] += 1
+            entry["int8_samples"] += 1
     result = {}
     for device_id, entry in devices.items():
-        fp16_mean = entry["fp16_sum"] / entry["samples"]
-        int8_mean = entry["int8_sum"] / entry["int8_count"] if entry["int8_count"] else None
-        result[device_id] = {"mac_fp16_ratio": round(fp16_mean, 6), "mac_int8_ratio": round(int8_mean, 6) if int8_mean is not None else None, "samples": entry["samples"]}
+        result[device_id] = {"samples": entry["samples"], "fp16_sum": entry["fp16_sum"], "int8_samples": entry["int8_samples"], "int8_sum": entry["int8_sum"]}
     return result
 
 
@@ -211,6 +252,11 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="print plan, zero side effects")
     args = parser.parse_args(argv)
 
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _forward_signal)
+    if hasattr(signal, "SIGINT"):
+        signal.signal(signal.SIGINT, _forward_signal)
+
     config = json.loads(args.config)
     devices = config.get("devices")
     if not isinstance(devices, list) or not devices:
@@ -225,11 +271,13 @@ def main(argv=None):
     wait_for_traffic = bool(config.get("waitForTraffic", False))
 
     root = Path(args.artifacts) / "msprof"
+    traffic_wait_max = min(600, max(60, period_sec // 10))
     meta = {"tag": "agentx", "devices": device_ids, "freq_hz": freq_hz,
             "metrics": metrics, "period_sec": period_sec, "include_hbm": include_hbm}
     if metrics_url:
         meta["metrics_url"] = metrics_url
     meta["wait_for_traffic"] = wait_for_traffic and bool(metrics_url)
+    meta["traffic_wait_max_sec"] = traffic_wait_max
 
     if args.dry_run:
         flags = [f"--sys-period={period_sec}", f"--sys-devices={','.join(map(str, device_ids))}",
@@ -246,10 +294,13 @@ def main(argv=None):
     traffic_wait_sec = 0.0
     traffic_triggered = False
     if meta["wait_for_traffic"]:
-        max_wait_sec = max(600, period_sec * 3)
         traffic_triggered = wait_for_serving_traffic(
-            metrics_url, poll_sec=2, trigger_polls=3, max_wait_sec=max_wait_sec)
+            metrics_url, poll_sec=2, trigger_polls=3, max_wait_sec=traffic_wait_max)
         traffic_wait_sec = round(time.monotonic() - wait_started, 3)
+        if not traffic_triggered:
+            print(json.dumps({"status": "error", "code": "traffic_wait_timeout",
+                              "detail": f"no sustained serving traffic within {traffic_wait_max}s"}))
+            return 1
     meta["traffic_wait_sec"] = traffic_wait_sec
     meta["traffic_triggered_start"] = traffic_triggered
     exported = root / "exported"
@@ -264,17 +315,39 @@ def main(argv=None):
         flags.append("--sys-hardware-mem=on")
     flags.append(f"--output={remote_output}")
 
-    command = f"source /usr/local/Ascend/ascend-toolkit/set_env.sh 2>/dev/null; {binary} " + " ".join(flags)
     collect_log = root / "collect.log"
+    stop_path = root / "STOP"
+    stop_mode = "period-complete"
     try:
-        result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
-                                timeout=period_sec + 300)
-        collect_log.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
-        if result.returncode != 0:
+        collector = subprocess.Popen(
+            ["bash", "-c", CANN_ENV_LOADER, binary, *flags],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=sys.platform != "win32")
+        _COLLECTORS.append(collector)
+        deadline = time.monotonic() + period_sec + 300
+        stdout = stderr = ""
+        while True:
+            try:
+                stdout, stderr = collector.communicate(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if stop_path.exists():
+                stop_mode = "harness-requested"
+                _terminate_collector(collector)
+                stdout, stderr = collector.communicate()
+                break
+            if time.monotonic() > deadline:
+                stop_mode = "timeout"
+                _terminate_collector(collector)
+                stdout, stderr = collector.communicate()
+                break
+        collect_log.write_text(stdout + "\n" + stderr, encoding="utf-8")
+        if collector.returncode != 0:
             print(json.dumps({"status": "error", "code": "msprof_exit_nonzero",
-                              "returncode": result.returncode}))
+                              "returncode": collector.returncode}))
             return 1
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+    except FileNotFoundError as exc:
         collect_log.write_text(str(exc), encoding="utf-8")
         print(json.dumps({"status": "error", "code": "msprof_launch_failed"}))
         return 1
@@ -295,19 +368,18 @@ def main(argv=None):
     for csv_path in _core_files(exported):
         try:
             for device_id, values in parse_core_csv(csv_path).items():
-                existing = csv_devices.setdefault(device_id, {"samples": 0, "fp16_sum": 0.0, "int8_sum": 0.0, "int8_count": 0})
+                existing = csv_devices.setdefault(device_id, {"samples": 0, "fp16_sum": 0.0, "int8_samples": 0, "int8_sum": 0.0})
                 existing["samples"] += values["samples"]
-                existing["fp16_sum"] += values["mac_fp16_ratio"] * values["samples"]
-                if values["mac_int8_ratio"] is not None:
-                    existing["int8_sum"] += values["mac_int8_ratio"] * values["samples"]
-                    existing["int8_count"] += values["samples"]
+                existing["fp16_sum"] += values["fp16_sum"]
+                existing["int8_samples"] += values["int8_samples"]
+                existing["int8_sum"] += values["int8_sum"]
         except MsprofError as exc:
             csv_errors.append(f"{exc.code}: {exc.detail}")
 
     devices_summary = {}
     for device_id, entry in csv_devices.items():
         fp16_mean = entry["fp16_sum"] / entry["samples"]
-        int8_mean = entry["int8_sum"] / entry["int8_count"] if entry["int8_count"] else None
+        int8_mean = entry["int8_sum"] / entry["int8_samples"] if entry["int8_samples"] else None
         devices_summary[str(device_id)] = {
             "mac_fp16_ratio": round(fp16_mean, 6),
             "mac_int8_ratio": round(int8_mean, 6) if int8_mean is not None else None,
@@ -335,6 +407,7 @@ def main(argv=None):
     summary = {
         "schemaVersion": SCHEMA_VERSION,
         "kind": SUMMARY_KIND,
+        "requestedDevices": device_ids,
         "aggregate": {"device_count": len(devices_summary), "mac_fp16_ratio_mean": aggregate_fp16},
         "devices": devices_summary,
         "availability": availability,
@@ -351,6 +424,7 @@ def main(argv=None):
         "freq_hz": freq_hz,
         "metrics": metrics,
         "include_hbm": include_hbm,
+        "stop_mode": stop_mode,
     }
     (root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (root / "window.json").write_text(json.dumps(window, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

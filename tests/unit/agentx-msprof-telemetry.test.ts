@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseMsprofConfig, parseMsprofOutput } from "../../src/plugins/benchmarks/inference-engine/agentx/evidence/msprof-telemetry.js";
+import { helperPath, parseMsprofConfig, parseMsprofOutput, parseMsprofSummary, resolveMsprofSettings, settleHelperResult } from "../../src/plugins/benchmarks/inference-engine/agentx/evidence/msprof-telemetry.js";
 import { parseAgentXReplayConfig } from "../../src/plugins/solvers/agentx-replay.js";
 
 test("msprof telemetry config is opt-in and validates device identity", () => {
@@ -48,4 +48,42 @@ test("msprof error and empty outputs produce error result without throwing", () 
   expect(parseMsprofOutput("").status).toBe("error");
   expect(parseMsprofOutput(JSON.stringify({ status: "error", code: "msprof_binary_missing" })).status).toBe("error");
   expect(parseMsprofOutput("not json\nat all")).toBeDefined();
+});
+
+test("helper result prefers structured error JSON over exit codes", () => {
+  const structured = settleHelperResult(1, JSON.stringify({ status: "error", code: "traffic_wait_timeout" }), "stderr noise");
+  expect(structured).toEqual({ status: "error", code: "traffic_wait_timeout" });
+  const fallback = settleHelperResult(2, "garbage\nlines", "boom  detail\n");
+  expect(fallback.status).toBe("error");
+  expect(fallback.code).toBe("msprof_exit_2");
+  expect(fallback.detail).toBe("boom detail");
+  const zeroExit = settleHelperResult(0, JSON.stringify({ status: "error", code: "msprof_output_missing" }), "");
+  expect(zeroExit.code).toBe("msprof_output_missing");
+});
+
+test("msprof settings only fill missing traffic-detection fields", () => {
+  const base = { devices: [{ deviceId: 0 }], freqHz: 10, metrics: "ArithmeticUtilization", includeHbm: false };
+  const inferred = resolveMsprofSettings(base, "http://127.0.0.1:18080/metrics");
+  expect(inferred.metricsUrl).toBe("http://127.0.0.1:18080/metrics");
+  expect(inferred.waitForTraffic).toBe(true);
+  const explicit = resolveMsprofSettings({ ...base, metricsUrl: "http://monitor/metrics", waitForTraffic: false }, "http://ignored/metrics");
+  expect(explicit.metricsUrl).toBe("http://monitor/metrics");
+  expect(explicit.waitForTraffic).toBe(false);
+  expect(resolveMsprofSettings(base).waitForTraffic).toBeUndefined();
+});
+
+test("helper path resolves into packaged AgentX runtime assets", () => {
+  expect(helperPath().replace(/\\/gu, "/")).toContain("dist/runtimes/agentx/assets/msprof_service.py");
+});
+
+test("msprof summary validates requestedDevices when present", () => {
+  const valid = {
+    schemaVersion: 1, kind: "profiling-summary",
+    aggregate: { device_count: 1, mac_fp16_ratio_mean: 0.5 },
+    devices: { "0": { mac_fp16_ratio: 0.5, mac_int8_ratio: null, samples: 3 } },
+    availability: { mac_fp16_ratio: "interpretable" }, csv_parse_errors: [],
+  };
+  expect(parseMsprofSummary({ ...valid, requestedDevices: [0, 1] }).requestedDevices).toEqual([0, 1]);
+  for (const bad of [[], ["0"], [-1], [0.5]])
+    expect(() => parseMsprofSummary({ ...valid, requestedDevices: bad })).toThrow();
 });

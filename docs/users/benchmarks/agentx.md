@@ -215,6 +215,29 @@ Harness strips trailing slashes and appends `/metrics` when absent. Both sources
 
 vLLM uses `/metrics` for KV cache, running/waiting requests, preemptions, prefix queries/hits, and input/output tokens, matched explicitly by version. Counters show window deltas/rates rather than lifetime totals. Adjacent deltas accumulate in sample order, retaining restart resets. Model labels/endpoints/profiling/warmup are separate; the first in-window sample uses the previous sample as baseline.
 
+### msprof Service-Level Profiling (Opt-In)
+
+`telemetry.msprof` adds sample-based CANN duty-cycle collection alongside vLLM/Ascend telemetry. It requires `hardware: npu` and a host/toolbox with the `msprof` binary in PATH or a known CANN location; missing binaries mark the source failed without blocking request telemetry.
+
+```yaml
+telemetry:
+  vllm:
+    endpoint: http://127.0.0.1:18080/metrics
+  msprof:
+    devices:
+      - deviceId: 0
+      - deviceId: 1
+    freqHz: 10
+    metrics: ArithmeticUtilization
+    includeHbm: false
+```
+
+`freqHz` is an integer 1-100 (default 10); `metrics` selects the AICore metric set; `includeHbm` additionally samples HBM counters whose units are unverified and excluded from verdicts. Device IDs follow the same `npu-smi` physical identity as Ascend telemetry.
+
+Collection starts when the serving endpoint shows sustained token traffic (up to a bounded wait; no traffic ends the attempt with `traffic_wait_timeout` instead of collecting idle devices) and runs for the measurement duration. The solver writes `msprof-telemetry.json` evidence plus `msprof/{window.json,summary.json,SHA256SUMS}`; completed summaries include per-device `mac_fp16_ratio` and a `profiling-summary v1` contract with field-availability labels. Failures stay in the attempt record without blocking the benchmark.
+
+`mac_fp16_ratio` is the sample-based AICore FP16 MAC duty cycle (truth-caliber); it has no correspondence to `npu-smi` AICore%. `aic_mac_ratio_extra` from `MetricSummary.sqlite` stays source-specific-uncalibrated. Collection is mutually exclusive with `acl_task_time` and torch profiler in the same window; never run both.
+
 Raw upstream JSON/JSONL remains intact. Reports use ordered counters; rates divide by last in-window timestamp minus baseline, blank if nonpositive. Excluded boundary samples can make counter totals differ from request tokens; counts lost between scrapes cannot be restored. Request counts never substitute for device counters.
 
 Host samplers use existing Python 3/driver `npu-smi` without extra packages.

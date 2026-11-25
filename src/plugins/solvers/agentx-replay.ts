@@ -14,7 +14,7 @@ import { normalizeTelemetry, parseTelemetryConfig, type AgentXTelemetryConfig } 
 import { agentXBridgeDigest, agentXLocalInstallation, lockAgentXLexicon, resolveAgentXPython, type AgentXLexicon } from "../../runtimes/agentx/runtime.js";
 import { startHostTelemetry, type HostNpuSampling } from "../../runtimes/agentx/host-telemetry.js";
 import { parseNetworkLatencyConfig, type AgentXNetworkLatencyConfig } from "../benchmarks/inference-engine/agentx/evidence/network-latency.js";
-import { startMsprofCollection, type MsprofResult } from "../benchmarks/inference-engine/agentx/evidence/msprof-telemetry.js";
+import { resolveMsprofSettings, startMsprofCollection, type MsprofCollection } from "../benchmarks/inference-engine/agentx/evidence/msprof-telemetry.js";
 
 export type AgentXReplayConfig = {
   tokenizer?: string;
@@ -122,19 +122,19 @@ export class AgentXReplaySolver implements Solver {
         this.runtime.environmentName === "local" ? python : undefined);
     }
     const msprofConfig = this.config.telemetry?.msprof;
-    let msprofPromise: Promise<MsprofResult> | undefined;
+    let msprofCollection: MsprofCollection | undefined;
     if (msprofConfig) {
       context.activity?.({ message: "Starting msprof service profiling on the host", activity: true });
       const periodSec = workload.durationSeconds;
       const metricsUrl = this.config.telemetry?.vllm?.endpoint ??
         (session.modelEndpoint?.baseUrl ? agentXEndpoint(session.modelEndpoint.baseUrl).url + "/metrics" : undefined);
-      const msprofSettings = metricsUrl === undefined ? msprofConfig :
-        { ...msprofConfig, metricsUrl, waitForTraffic: true };
-      msprofPromise = startMsprofCollection(msprofSettings, join(context.paths.agent, "msprof"), periodSec,
+      msprofCollection = startMsprofCollection(resolveMsprofSettings(msprofConfig, metricsUrl), join(context.paths.agent, "msprof"), periodSec,
         context.signal, this.runtime.environmentName === "local" ? python : undefined);
     }
-    try { return await this.executeMeasurement(input, session, python, runner, lexicon, context, sampling, msprofPromise); }
+    const telemetryBridge = this.config.telemetry === undefined ? undefined : bridgeTelemetry(this.config.telemetry);
+    try { return await this.executeMeasurement(input, session, python, runner, lexicon, context, sampling, msprofCollection, telemetryBridge); }
     finally {
+      if (msprofCollection) await msprofCollection.stop();
       if (sampling) await writeFile(join(context.paths.agent, "host-telemetry.json"),
         JSON.stringify({ localAscend: await sampling.finish() }, null, 2) + "\n", "utf8");
     }
@@ -142,7 +142,8 @@ export class AgentXReplaySolver implements Solver {
 
   private async executeMeasurement(input: PublicTask, session: EnvironmentSession, python: string, runner: string,
     lexicon: AgentXLexicon, context: AttemptContext, sampling?: HostNpuSampling,
-    msprofPromise?: Promise<MsprofResult>): Promise<SolveResult> {
+    msprofCollection?: MsprofCollection,
+    telemetryBridge?: Omit<AgentXTelemetryConfig, "msprof">): Promise<SolveResult> {
     const workload = parseWorkload(input.payload);
     const base = session.modelEndpoint?.baseUrl ?? this.binding.model.endpoint;
     if (base === null) throw new TypeError("Missing AgentX endpoint");
@@ -150,7 +151,7 @@ export class AgentXReplaySolver implements Solver {
     const tokenizerPath = this.runtime.environmentName === "local" ? join(session.workdir, "agentx-tokenizer") : posix.join(session.workdir, "agentx-tokenizer");
     const request = { schemaVersion: 1, key: context.key, workload, ...endpoint,
       ...(this.config.networkLatency === undefined ? {} : { networkLatency: this.config.networkLatency }),
-      ...(this.config.telemetry === undefined ? {} : { telemetry: bridgeTelemetry(this.config.telemetry) }),
+      ...(telemetryBridge && (telemetryBridge.vllm || telemetryBridge.ascend) ? { telemetry: telemetryBridge } : {}),
       ...(sampling ? { hostAscend: sampling.targets } : {}),
       model: this.binding.model.name, auth: this.binding.auth, tokenizerPath, trustRemoteCode: this.config.trustRemoteCode,
       ...(this.binding.model.reasoningEffort === undefined ? {} : { reasoningEffort: this.binding.model.reasoningEffort }),
@@ -193,10 +194,16 @@ export class AgentXReplaySolver implements Solver {
         this.config.networkLatency === undefined ? undefined : { config: this.config.networkLatency, probes: terminal.networkLatencyProbes });
       let telemetry = terminal.telemetry;
       if (sampling) telemetry = { ...expectRecord(telemetry, "host telemetry evidence"), localAscend: await sampling.finish() };
-      if (this.config.telemetry) summary.telemetry = normalizeTelemetry(this.config.telemetry, this.binding.model.name, telemetry);
-      if (msprofPromise) {
-        const msprofResult = await msprofPromise;
+      if (telemetryBridge && (telemetryBridge.vllm || telemetryBridge.ascend)) summary.telemetry = normalizeTelemetry(telemetryBridge, this.binding.model.name, telemetry);
+      if (msprofCollection) {
+        const msprofResult = await msprofCollection.result;
         if (msprofResult.status === "completed" && msprofResult.summary) (summary as Record<string, unknown>).msprof = msprofResult.summary;
+        const requestedDevices = msprofResult.summary?.requestedDevices ?? msprofCollection.requestedDevices;
+        (summary as Record<string, unknown>).msprofAttempt = {
+          requestedDevices,
+          status: msprofResult.status,
+          ...(msprofResult.status === "error" && msprofResult.code ? { code: msprofResult.code } : {}),
+        };
         await writeFile(join(context.paths.agent, "msprof-telemetry.json"), JSON.stringify(msprofResult, null, 2) + "\n", "utf8");
       }
       await writeFile(join(context.paths.agent, "agentx-summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");

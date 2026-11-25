@@ -6,7 +6,8 @@ import { expectRecord, rejectUnknown } from "../../../../../core/validation/inpu
 
 /** msprof service-level profiling config (opt-in, alongside vllm/ascend telemetry). */
 export type MsprofConfig = {
-  devices: { deviceId: number }[];
+  /** Explicit card/chip list, or "all" resolved on the host via npu-smi at collection time. */
+  devices: "all" | { deviceId: number }[];
   freqHz: number;
   metrics: string;
   includeHbm: boolean;
@@ -32,7 +33,7 @@ export type MsprofResult = { status: "completed" | "error"; summary?: MsprofSumm
 
 /** Stoppable collection handle; `stop` also reclaims the helper process tree. */
 export type MsprofCollection = {
-  requestedDevices: number[];
+  requestedDevices: number[] | "all";
   result: Promise<MsprofResult>;
   stop(): Promise<void>;
 };
@@ -49,29 +50,37 @@ export function parseMsprofConfig(value: unknown): MsprofConfig {
   rejectUnknown(raw, ["devices", "deviceIds", "freqHz", "metrics", "includeHbm", "metricsUrl", "waitForTraffic"], "telemetry.msprof");
   if (raw.devices !== undefined && raw.deviceIds !== undefined)
     throw new TypeError("msprof telemetry accepts either devices or deviceIds, not both");
-  // `deviceIds: "4,5,6"` lets callers drive device binding from config/env without
-  // structured YAML; both forms normalize to the same devices array below.
-  let deviceList: unknown = raw.devices;
+  const parseDeviceList = (list: unknown): { deviceId: number }[] => {
+    if (!Array.isArray(list) || !list.length)
+      throw new TypeError("msprof telemetry requires at least one device");
+    const seen = new Set<number>();
+    return list.map(entry => {
+      const device = expectRecord(entry, "telemetry.msprof.devices entry");
+      rejectUnknown(device, ["deviceId"], "telemetry.msprof.devices entry");
+      const deviceId = typeof device.deviceId === "number" && Number.isSafeInteger(device.deviceId) && device.deviceId >= 0
+        ? device.deviceId : (() => { throw new TypeError(`Invalid msprof deviceId: ${JSON.stringify(device.deviceId ?? null)}`); })();
+      if (seen.has(deviceId)) throw new TypeError("Duplicate msprof deviceId");
+      seen.add(deviceId);
+      return { deviceId };
+    });
+  };
+  // `deviceIds: "4,5,6"` drives binding from config/env without structured YAML;
+  // `deviceIds: "all"` resolves every compute chip on the host at collection time.
+  let devices: "all" | { deviceId: number }[];
   if (raw.deviceIds !== undefined) {
     if (typeof raw.deviceIds !== "string" || !raw.deviceIds.trim())
-      throw new TypeError("Invalid msprof deviceIds: expected a non-empty comma-separated string");
-    deviceList = raw.deviceIds.split(",").map(id => {
-      const trimmed = id.trim();
-      return { deviceId: /^[0-9]+$/u.test(trimmed) ? Number(trimmed) : trimmed };
-    });
+      throw new TypeError(`Invalid msprof deviceIds: expected a non-empty comma-separated string or "all"`);
+    if (raw.deviceIds.trim().toLowerCase() === "all") {
+      devices = "all";
+    } else {
+      devices = parseDeviceList(raw.deviceIds.split(",").map(id => {
+        const trimmed = id.trim();
+        return { deviceId: /^[0-9]+$/u.test(trimmed) ? Number(trimmed) : trimmed };
+      }));
+    }
+  } else {
+    devices = parseDeviceList(raw.devices);
   }
-  if (!Array.isArray(deviceList) || !deviceList.length)
-    throw new TypeError("msprof telemetry requires at least one device");
-  const seen = new Set<number>();
-  const devices = deviceList.map(entry => {
-    const device = expectRecord(entry, "telemetry.msprof.devices entry");
-    rejectUnknown(device, ["deviceId"], "telemetry.msprof.devices entry");
-    const deviceId = typeof device.deviceId === "number" && Number.isSafeInteger(device.deviceId) && device.deviceId >= 0
-      ? device.deviceId : (() => { throw new TypeError(`Invalid msprof deviceId: ${JSON.stringify(device.deviceId ?? null)}`); })();
-    if (seen.has(deviceId)) throw new TypeError("Duplicate msprof deviceId");
-    seen.add(deviceId);
-    return { deviceId };
-  });
   const freqHz = raw.freqHz === undefined ? 10 : (() => {
     if (typeof raw.freqHz !== "number" || !Number.isInteger(raw.freqHz) || raw.freqHz < 1 || raw.freqHz > 100)
       throw new TypeError("Invalid msprof freqHz: must be integer 1-100");
@@ -168,8 +177,9 @@ export function startMsprofCollection(
   const helper = helperPath();
   const python = pythonExecutable ?? "python3";
   const stopFile = join(artifacts, "msprof", "STOP");
+  const requestedDevices: number[] | "all" = config.devices === "all" ? "all" : config.devices.map(device => device.deviceId);
   const helperConfig = {
-    devices: config.devices.map(device => device.deviceId),
+    devices: config.devices === "all" ? ["all"] : requestedDevices,
     freqHz: config.freqHz,
     metrics: config.metrics,
     includeHbm: config.includeHbm,
@@ -206,7 +216,7 @@ export function startMsprofCollection(
     });
   }
   return {
-    requestedDevices: helperConfig.devices,
+    requestedDevices,
     result,
     async stop() {
       if (stopped || settled) return;

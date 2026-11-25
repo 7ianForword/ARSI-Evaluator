@@ -91,8 +91,11 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
         lines.push("", "mac_fp16_ratio 是 msprof sample-based 采集的 AICore FP16 MAC 占空比真值，与 npu-smi AICore% 无对应关系。0.85 为 compute_bound 参考阈值（待标定）；低于该值且吞吐停滞时墙型为 host_overhead。", "");
       }
     } else if (msprofAttempt && msprofAttempt.status === "error") {
+      const requestedText = Array.isArray(msprofAttempt.requestedDevices)
+        ? (msprofAttempt.requestedDevices.join(", ") || "—")
+        : String(msprofAttempt.requestedDevices ?? "—");
       lines.push("#### msprof 服务级 profiling", "",
-        `采集失败：${typeof msprofAttempt.code === "string" ? msprofAttempt.code : "unknown"}；请求设备：${Array.isArray(msprofAttempt.requestedDevices) ? msprofAttempt.requestedDevices.join(", ") || "—" : "—"}。证据见 msprof-telemetry.json。`, "");
+        `采集失败：${typeof msprofAttempt.code === "string" ? msprofAttempt.code : "unknown"}；请求设备：${requestedText}。证据见 msprof-telemetry.json。`, "");
     }
     if (summary.replayCoverage) {
       const coverage = summary.replayCoverage;

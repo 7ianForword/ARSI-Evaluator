@@ -125,7 +125,7 @@ export type AgentXSummary = {
 };
 
 export type AgentXMsprofAttempt = {
-  requestedDevices: number[];
+  requestedDevices: number[] | "all";
   status: "completed" | "error";
   code?: string;
 };
@@ -133,8 +133,9 @@ export type AgentXMsprofAttempt = {
 function parseMsprofAttempt(value: unknown): AgentXMsprofAttempt {
   const raw = expectRecord(value, "msprof attempt");
   rejectUnknown(raw, ["requestedDevices", "status", "code"], "msprof attempt");
-  if (!Array.isArray(raw.requestedDevices) || !raw.requestedDevices.length ||
-      raw.requestedDevices.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0))
+  const devicesAll = raw.requestedDevices === "all";
+  if (!devicesAll && (!Array.isArray(raw.requestedDevices) || !raw.requestedDevices.length ||
+      raw.requestedDevices.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0)))
     throw new TypeError("Invalid msprof attempt requestedDevices");
   if (raw.status !== "completed" && raw.status !== "error") throw new TypeError("Invalid msprof attempt status");
   if (raw.code !== undefined && typeof raw.code !== "string") throw new TypeError("Invalid msprof attempt code");

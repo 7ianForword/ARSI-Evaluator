@@ -234,6 +234,8 @@ telemetry:
 
 `freqHz` is an integer 1-100 (default 10); `metrics` selects the AICore metric set; `includeHbm` additionally samples HBM counters whose units are unverified and excluded from verdicts. Device IDs follow the same `npu-smi` physical identity as Ascend telemetry.
 
+Device binding accepts either the structured `devices` list or a compact `deviceIds` string: `deviceIds: "4,5,6,7"` samples those IDs, and `deviceIds: "all"` (the default when no binding is specified) resolves every compute chip on the host via `npu-smi info -m` at collection time, recording the resolved set in `window.json`. Use "all" only on hosts where every device is authorized for sampling; otherwise pass the authorized list explicitly.
+
 Structured `devices` entries and a comma-separated `deviceIds` string are mutually exclusive alternatives with identical semantics; `deviceIds: "4,5,6,7"` exists so callers can drive device binding from environment substitution without embedding card identities in evaluator code. Binding correctness stays with the caller: the chosen devices must match the authorized window resources. Unresolved placeholders (for example an unset `"${MSPROF_DEVICES}"`) fail validation with the raw token in the error.
 
 Collection starts when the serving endpoint shows sustained token traffic (up to a bounded wait; no traffic ends the attempt with `traffic_wait_timeout` instead of collecting idle devices) and runs for the measurement duration. The solver writes `msprof-telemetry.json` evidence plus `msprof/{window.json,summary.json,SHA256SUMS}`; completed summaries include per-device `mac_fp16_ratio` and a `profiling-summary v1` contract with field-availability labels. Failures stay in the attempt record without blocking the benchmark.

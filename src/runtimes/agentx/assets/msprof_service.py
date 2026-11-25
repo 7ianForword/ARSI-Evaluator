@@ -13,6 +13,7 @@ Usage:
 """
 import argparse
 import csv
+import re
 import hashlib
 import json
 import math
@@ -244,6 +245,26 @@ def resolve_msprof(explicit):
     raise MsprofError("msprof_binary_missing", "PATH and known CANN locations")
 
 
+def resolve_all_devices(run=None):
+    """Enumerate every compute chip via npu-smi; msprof --sys-devices takes davinci chip IDs."""
+    runner = run or subprocess.run
+    try:
+        result = runner(["npu-smi", "info", "-m"], capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise MsprofError("devices_unresolved", f"npu-smi enumeration failed: {exc}")
+    if result.returncode != 0:
+        raise MsprofError("devices_unresolved", f"npu-smi exited {result.returncode}")
+    chips = set()
+    for line in result.stdout.splitlines():
+        # npu-smi info -m rows: NPU ID, Chip ID, Chip Logic ID, Chip Name.
+        row = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(\d+|-)\s+(.+?)\s*", line)
+        if row and row[3] != "-" and not re.search(r"\bmcu\b", row[4], re.I):
+            chips.add(int(row[3]))
+    if not chips:
+        raise MsprofError("devices_unresolved", "npu-smi info -m contained no compute chips")
+    return sorted(chips)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="JSON config string")
@@ -262,7 +283,20 @@ def main(argv=None):
     if not isinstance(devices, list) or not devices:
         print(json.dumps({"status": "error", "code": "devices_missing"}))
         return 1
-    device_ids = sorted({int(item) for item in devices})
+    if [str(item).strip().lower() for item in devices] == ["all"]:
+        devices_source = "npu-smi-enumeration"
+        try:
+            device_ids = resolve_all_devices()
+        except MsprofError as exc:
+            print(json.dumps({"status": "error", "code": exc.code, "detail": exc.detail}))
+            return 1
+    else:
+        devices_source = "explicit"
+        try:
+            device_ids = sorted({int(item) for item in devices})
+        except (TypeError, ValueError):
+            print(json.dumps({"status": "error", "code": "devices_missing"}))
+            return 1
     freq_hz = int(config.get("freqHz", 10))
     metrics = str(config.get("metrics", "ArithmeticUtilization"))
     period_sec = int(config.get("periodSec", 3600))
@@ -272,7 +306,7 @@ def main(argv=None):
 
     root = Path(args.artifacts) / "msprof"
     traffic_wait_max = min(600, max(60, period_sec // 10))
-    meta = {"tag": "agentx", "devices": device_ids, "freq_hz": freq_hz,
+    meta = {"tag": "agentx", "devices": device_ids, "devices_source": devices_source, "freq_hz": freq_hz,
             "metrics": metrics, "period_sec": period_sec, "include_hbm": include_hbm}
     if metrics_url:
         meta["metrics_url"] = metrics_url
@@ -418,6 +452,7 @@ def main(argv=None):
 
     window = {
         "tag": "agentx",
+        "devices_source": devices_source,
         "started_at": started_at,
         "period_sec": period_sec,
         "devices": ",".join(map(str, device_ids)),

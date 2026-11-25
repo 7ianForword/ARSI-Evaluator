@@ -11,9 +11,14 @@ test("msprof telemetry config is opt-in and validates device identity", () => {
   expect(parsed.telemetry?.msprof?.freqHz).toBe(10);
   expect(parsed.telemetry?.msprof?.metrics).toBe("ArithmeticUtilization");
   expect(parsed.telemetry?.msprof?.includeHbm).toBe(false);
+  const allParsed = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "all" } } });
+  expect(allParsed.telemetry?.msprof?.devices).toBe("all");
+  const listParsed = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "4, 5,6" } } });
+  expect(listParsed.telemetry?.msprof?.devices).toEqual([{ deviceId: 4 }, { deviceId: 5 }, { deviceId: 6 }]);
   for (const bad of [{}, { devices: [] }, { devices: [{ deviceId: -1 }] },
     { devices: [{ deviceId: 0 }, { deviceId: 0 }] }, { devices: [{ deviceId: 0 }], freqHz: 0 },
-    { devices: [{ deviceId: 0 }], freqHz: 101 }, { devices: [{ deviceId: 0, chipId: 0 }], unknownField: true }])
+    { devices: [{ deviceId: 0 }], freqHz: 101 }, { devices: [{ deviceId: 0, chipId: 0 }], unknownField: true },
+    { devices: [{ deviceId: 0 }], deviceIds: "all" }, { deviceIds: "all,x" }, { deviceIds: "" }])
     expect(() => parseAgentXReplayConfig({ telemetry: { msprof: bad } })).toThrow();
 });
 

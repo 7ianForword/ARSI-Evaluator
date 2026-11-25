@@ -46,15 +46,28 @@ export function resolveMsprofSettings(config: MsprofConfig, inferredMetricsUrl?:
 
 export function parseMsprofConfig(value: unknown): MsprofConfig {
   const raw = expectRecord(value, "telemetry.msprof");
-  rejectUnknown(raw, ["devices", "freqHz", "metrics", "includeHbm", "metricsUrl", "waitForTraffic"], "telemetry.msprof");
-  if (!Array.isArray(raw.devices) || !raw.devices.length)
+  rejectUnknown(raw, ["devices", "deviceIds", "freqHz", "metrics", "includeHbm", "metricsUrl", "waitForTraffic"], "telemetry.msprof");
+  if (raw.devices !== undefined && raw.deviceIds !== undefined)
+    throw new TypeError("msprof telemetry accepts either devices or deviceIds, not both");
+  // `deviceIds: "4,5,6"` lets callers drive device binding from config/env without
+  // structured YAML; both forms normalize to the same devices array below.
+  let deviceList: unknown = raw.devices;
+  if (raw.deviceIds !== undefined) {
+    if (typeof raw.deviceIds !== "string" || !raw.deviceIds.trim())
+      throw new TypeError("Invalid msprof deviceIds: expected a non-empty comma-separated string");
+    deviceList = raw.deviceIds.split(",").map(id => {
+      const trimmed = id.trim();
+      return { deviceId: /^[0-9]+$/u.test(trimmed) ? Number(trimmed) : trimmed };
+    });
+  }
+  if (!Array.isArray(deviceList) || !deviceList.length)
     throw new TypeError("msprof telemetry requires at least one device");
   const seen = new Set<number>();
-  const devices = raw.devices.map(entry => {
+  const devices = deviceList.map(entry => {
     const device = expectRecord(entry, "telemetry.msprof.devices entry");
     rejectUnknown(device, ["deviceId"], "telemetry.msprof.devices entry");
     const deviceId = typeof device.deviceId === "number" && Number.isSafeInteger(device.deviceId) && device.deviceId >= 0
-      ? device.deviceId : (() => { throw new TypeError("Invalid msprof deviceId"); })();
+      ? device.deviceId : (() => { throw new TypeError(`Invalid msprof deviceId: ${JSON.stringify(device.deviceId ?? null)}`); })();
     if (seen.has(deviceId)) throw new TypeError("Duplicate msprof deviceId");
     seen.add(deviceId);
     return { deviceId };

@@ -17,6 +17,16 @@ test("msprof telemetry config is opt-in and validates device identity", () => {
     expect(() => parseAgentXReplayConfig({ telemetry: { msprof: bad } })).toThrow();
 });
 
+test("msprof telemetry accepts deviceIds string instead of structured devices", () => {
+  const parsed = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "4, 5,6" } } });
+  expect(parsed.telemetry?.msprof?.devices).toEqual([{ deviceId: 4 }, { deviceId: 5 }, { deviceId: 6 }]);
+  expect(parseAgentXReplayConfig({ telemetry: { msprof: { devices: [{ deviceId: 4 }] } } }).telemetry?.msprof?.devices).toEqual([{ deviceId: 4 }]);
+  for (const bad of [
+    { deviceIds: "" }, { deviceIds: "4,,6" }, { deviceIds: "x" }, { deviceIds: "${MSPROF_DEVICES}" },
+    { deviceIds: "4,5", devices: [{ deviceId: 4 }] }, { deviceIds: "4", unknownField: true }])
+    expect(() => parseAgentXReplayConfig({ telemetry: { msprof: bad } })).toThrow();
+});
+
 test("msprof summary validates mac_fp16_ratio bounds and schema version", () => {
   const valid = {
     status: "completed",

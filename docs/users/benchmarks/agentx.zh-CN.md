@@ -265,6 +265,8 @@ telemetry:
 
 `freqHz` 为 1-100 整数（默认 10）；`metrics` 选择 AICore 指标集；`includeHbm` 额外采样 HBM 计数器（单位未核实，不参与判定）。设备 ID 与 Ascend 遥测一致，使用 `npu-smi` 物理编号。
 
+结构化 `devices` 数组与逗号分隔的 `deviceIds` 字符串互斥且语义相同；`deviceIds: "4,5,6,7"` 供调用方通过环境变量替换驱动设备绑定，evaluator 代码不出现具体卡号。绑定正确性由调用方负责：所选设备必须与当次授权窗口的卡资源一致。未解析的占位符（例如未设置的 `"${MSPROF_DEVICES}"`）会在校验时报错并保留原始字符串。
+
 采集在服务端点出现持续 token 流量后启动（等待上限有界；无流量时以 `traffic_wait_timeout` 及时结束，不采集空窗设备），采样时长覆盖测量窗。Solver 写入 `msprof-telemetry.json` 证据与 `msprof/{window.json,summary.json,SHA256SUMS}`；完成时摘要含逐卡 `mac_fp16_ratio` 和 `profiling-summary v1` 契约及字段可用性标注。失败记录在 attempt 中，不阻塞测评主线。
 
 `mac_fp16_ratio` 是 msprof sample-based 采集的 AICore FP16 MAC 占空比真值，与 `npu-smi` AICore% 无对应关系；`MetricSummary.sqlite` 的 `aic_mac_ratio_extra` 保留 source-specific-uncalibrated 标注。采集与 `acl_task_time`、torch profiler 同窗互斥，不得同开。

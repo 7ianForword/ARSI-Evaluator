@@ -79,7 +79,7 @@ class MsprofError(ValueError):
         self.detail = detail
 
 
-def wait_for_serving_traffic(metrics_url, poll_sec=2, trigger_polls=3, max_wait_sec=600):
+def wait_for_serving_traffic(metrics_url, poll_sec=2, trigger_polls=3, max_wait_sec=600, stop_path=None):
     """Poll the vLLM metrics endpoint until token counters increase sustainably.
 
     The AgentX harness spends the first ~2 minutes on warmup without serving
@@ -95,6 +95,8 @@ def wait_for_serving_traffic(metrics_url, poll_sec=2, trigger_polls=3, max_wait_
     increases = 0
     started = time.monotonic()
     while time.monotonic() - started < max_wait_sec:
+        if stop_path is not None and stop_path.exists():
+            return False
         try:
             with urllib.request.urlopen(metrics_url, timeout=5) as resp:
                 text = resp.read().decode("utf-8", "replace")
@@ -245,8 +247,8 @@ def resolve_msprof(explicit):
     raise MsprofError("msprof_binary_missing", "PATH and known CANN locations")
 
 
-def resolve_all_devices(run=None):
-    """Enumerate every compute chip via npu-smi; msprof --sys-devices takes davinci chip IDs."""
+def enumerate_device_mapping(run=None):
+    """Map npu-smi physical NPU IDs to msprof davinci chip logic IDs."""
     runner = run or subprocess.run
     try:
         result = runner(["npu-smi", "info", "-m"], capture_output=True, text=True, timeout=10)
@@ -254,15 +256,34 @@ def resolve_all_devices(run=None):
         raise MsprofError("devices_unresolved", f"npu-smi enumeration failed: {exc}")
     if result.returncode != 0:
         raise MsprofError("devices_unresolved", f"npu-smi exited {result.returncode}")
-    chips = set()
+    mapping = {}
     for line in result.stdout.splitlines():
         # npu-smi info -m rows: NPU ID, Chip ID, Chip Logic ID, Chip Name.
         row = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(\d+|-)\s+(.+?)\s*", line)
         if row and row[3] != "-" and not re.search(r"\bmcu\b", row[4], re.I):
-            chips.add(int(row[3]))
-    if not chips:
+            mapping.setdefault(int(row[1]), set()).add(int(row[3]))
+    if not mapping:
         raise MsprofError("devices_unresolved", "npu-smi info -m contained no compute chips")
-    return sorted(chips)
+    return {str(device_id): sorted(chips) for device_id, chips in sorted(mapping.items())}
+
+
+def resolve_device_binding(devices, run=None):
+    """Resolve caller-facing npu-smi physical IDs into msprof chip logic IDs."""
+    mapping = enumerate_device_mapping(run)
+    if [str(item).strip().lower() for item in devices] == ["all"]:
+        requested = ["all"]
+    else:
+        try:
+            requested = sorted({int(item) for item in devices})
+        except (TypeError, ValueError):
+            raise MsprofError("devices_missing", "devices must contain integers or [\"all\"]")
+        missing = sorted(set(map(str, requested)) - set(mapping), key=int)
+        if missing:
+            raise MsprofError("devices_unresolved", f"npu-smi has no physical NPU ID(s): {','.join(map(str, missing))}")
+    resolved = sorted({chip for chips in mapping.values() for chip in chips}
+                      if requested == ["all"]
+                      else {chip for device_id in requested for chip in mapping[str(device_id)]})
+    return requested, resolved, mapping
 
 
 def main(argv=None):
@@ -283,20 +304,12 @@ def main(argv=None):
     if not isinstance(devices, list) or not devices:
         print(json.dumps({"status": "error", "code": "devices_missing"}))
         return 1
-    if [str(item).strip().lower() for item in devices] == ["all"]:
-        devices_source = "npu-smi-enumeration"
-        try:
-            device_ids = resolve_all_devices()
-        except MsprofError as exc:
-            print(json.dumps({"status": "error", "code": exc.code, "detail": exc.detail}))
-            return 1
-    else:
-        devices_source = "explicit"
-        try:
-            device_ids = sorted({int(item) for item in devices})
-        except (TypeError, ValueError):
-            print(json.dumps({"status": "error", "code": "devices_missing"}))
-            return 1
+    devices_source = "npu-smi-enumeration" if [str(item).strip().lower() for item in devices] == ["all"] else "explicit"
+    try:
+        requested_devices, device_ids, device_mapping = resolve_device_binding(devices)
+    except MsprofError as exc:
+        print(json.dumps({"status": "error", "code": exc.code, "detail": exc.detail}))
+        return 1
     freq_hz = int(config.get("freqHz", 10))
     metrics = str(config.get("metrics", "ArithmeticUtilization"))
     period_sec = int(config.get("periodSec", 3600))
@@ -305,8 +318,10 @@ def main(argv=None):
     wait_for_traffic = bool(config.get("waitForTraffic", False))
 
     root = Path(args.artifacts) / "msprof"
+    stop_path = root / "STOP"
     traffic_wait_max = min(600, max(60, period_sec // 10))
     meta = {"tag": "agentx", "devices": device_ids, "devices_source": devices_source, "freq_hz": freq_hz,
+            "requested_devices": requested_devices, "device_mapping": device_mapping,
             "metrics": metrics, "period_sec": period_sec, "include_hbm": include_hbm}
     if metrics_url:
         meta["metrics_url"] = metrics_url
@@ -329,9 +344,13 @@ def main(argv=None):
     traffic_triggered = False
     if meta["wait_for_traffic"]:
         traffic_triggered = wait_for_serving_traffic(
-            metrics_url, poll_sec=2, trigger_polls=3, max_wait_sec=traffic_wait_max)
+            metrics_url, poll_sec=2, trigger_polls=3, max_wait_sec=traffic_wait_max,
+            stop_path=stop_path)
         traffic_wait_sec = round(time.monotonic() - wait_started, 3)
         if not traffic_triggered:
+            if stop_path.exists():
+                print(json.dumps({"status": "error", "code": "harness_requested_before_collection"}))
+                return 1
             print(json.dumps({"status": "error", "code": "traffic_wait_timeout",
                               "detail": f"no sustained serving traffic within {traffic_wait_max}s"}))
             return 1
@@ -350,7 +369,6 @@ def main(argv=None):
     flags.append(f"--output={remote_output}")
 
     collect_log = root / "collect.log"
-    stop_path = root / "STOP"
     stop_mode = "period-complete"
     try:
         collector = subprocess.Popen(
@@ -377,7 +395,8 @@ def main(argv=None):
                 stdout, stderr = collector.communicate()
                 break
         collect_log.write_text(stdout + "\n" + stderr, encoding="utf-8")
-        if collector.returncode != 0:
+        intentionally_stopped = stop_mode != "period-complete"
+        if collector.returncode != 0 and not intentionally_stopped:
             print(json.dumps({"status": "error", "code": "msprof_exit_nonzero",
                               "returncode": collector.returncode}))
             return 1
@@ -441,7 +460,9 @@ def main(argv=None):
     summary = {
         "schemaVersion": SCHEMA_VERSION,
         "kind": SUMMARY_KIND,
-        "requestedDevices": device_ids,
+        "requestedDevices": requested_devices,
+        "resolvedDevices": device_ids,
+        "deviceMapping": device_mapping,
         "aggregate": {"device_count": len(devices_summary), "mac_fp16_ratio_mean": aggregate_fp16},
         "devices": devices_summary,
         "availability": availability,
@@ -453,6 +474,8 @@ def main(argv=None):
     window = {
         "tag": "agentx",
         "devices_source": devices_source,
+        "requested_devices": requested_devices,
+        "device_mapping": device_mapping,
         "started_at": started_at,
         "period_sec": period_sec,
         "devices": ",".join(map(str, device_ids)),
@@ -460,6 +483,7 @@ def main(argv=None):
         "metrics": metrics,
         "include_hbm": include_hbm,
         "stop_mode": stop_mode,
+        "collector_returncode": collector.returncode,
     }
     (root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (root / "window.json").write_text(json.dumps(window, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

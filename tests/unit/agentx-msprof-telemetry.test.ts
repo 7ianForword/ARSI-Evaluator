@@ -11,6 +11,7 @@ test("msprof telemetry config is opt-in and validates device identity", () => {
   expect(parsed.telemetry?.msprof?.freqHz).toBe(10);
   expect(parsed.telemetry?.msprof?.metrics).toBe("ArithmeticUtilization");
   expect(parsed.telemetry?.msprof?.includeHbm).toBe(false);
+  expect(parsed.telemetry?.msprof?.waitForTraffic).toBeUndefined();
   const allParsed = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "all" } } });
   expect(allParsed.telemetry?.msprof?.devices).toBe("all");
   const listParsed = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "4, 5,6" } } });
@@ -78,6 +79,14 @@ test("helper result prefers structured error JSON over exit codes", () => {
 
 test("msprof settings only fill missing traffic-detection fields", () => {
   const base = { devices: [{ deviceId: 0 }], freqHz: 10, metrics: "ArithmeticUtilization", includeHbm: false };
+  const parsedBase = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "0" } } }).telemetry?.msprof;
+  if (!parsedBase) throw new Error("Missing parsed msprof config");
+  expect(parsedBase.waitForTraffic).toBeUndefined();
+  const inferredEndpoint = resolveMsprofSettings(parsedBase, "http://127.0.0.1:18080/metrics");
+  expect(inferredEndpoint.waitForTraffic).toBe(true);
+  const explicitEndpoint = parseAgentXReplayConfig({ telemetry: { msprof: { deviceIds: "0", metricsUrl: "http://monitor/metrics" } } }).telemetry?.msprof;
+  if (!explicitEndpoint) throw new Error("Missing explicit endpoint config");
+  expect(resolveMsprofSettings(explicitEndpoint, "http://ignored/metrics").waitForTraffic).toBe(true);
   const inferred = resolveMsprofSettings(base, "http://127.0.0.1:18080/metrics");
   expect(inferred.metricsUrl).toBe("http://127.0.0.1:18080/metrics");
   expect(inferred.waitForTraffic).toBe(true);
@@ -99,6 +108,16 @@ test("msprof summary validates requestedDevices when present", () => {
     availability: { mac_fp16_ratio: "interpretable" }, csv_parse_errors: [],
   };
   expect(parseMsprofSummary({ ...valid, requestedDevices: [0, 1] }).requestedDevices).toEqual([0, 1]);
-  for (const bad of [[], ["0"], [-1], [0.5]])
+  const mapped = parseMsprofSummary({ ...valid, requestedDevices: [0], resolvedDevices: [0, 1], deviceMapping: { "0": [0, 1] } });
+  expect(mapped.resolvedDevices).toEqual([0, 1]);
+  expect(mapped.deviceMapping).toEqual({ "0": [0, 1] });
+  const all = parseMsprofSummary({ ...valid, requestedDevices: ["all"], resolvedDevices: [0, 1, 2], deviceMapping: { "0": [0, 1], "1": [2] } });
+  expect(all.requestedDevices).toEqual(["all"]);
+  expect(all.resolvedDevices).toEqual([0, 1, 2]);
+  expect(() => parseMsprofSummary({ ...valid, requestedDevices: ["all"] })).toThrow();
+  for (const bad of [[], ["0"], [-1], [0.5], ["all", 0]])
     expect(() => parseMsprofSummary({ ...valid, requestedDevices: bad })).toThrow();
+  for (const badMapping of [{}, { "0": [] }, { "0": ["1"] }, { "-1": [0] }, { "0": [0, 0] }])
+    expect(() => parseMsprofSummary({ ...valid, deviceMapping: badMapping })).toThrow();
+  expect(() => parseMsprofSummary({ ...valid, resolvedDevices: [0, 2], deviceMapping: { "0": [0], "1": [1] } })).toThrow();
 });

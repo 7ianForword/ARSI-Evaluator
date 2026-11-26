@@ -71,7 +71,8 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
       const agg = msprof.aggregate as Record<string, unknown> | undefined;
       const devices = msprof.devices as Record<string, Record<string, unknown>> | undefined;
       const mean = agg?.mac_fp16_ratio_mean;
-      const requested = Array.isArray(msprof.requestedDevices) ? msprof.requestedDevices.filter(v => typeof v === "number") : [];
+      const requested = Array.isArray(msprof.resolvedDevices) && msprof.resolvedDevices.length ? msprof.resolvedDevices
+        : Array.isArray(msprof.requestedDevices) ? msprof.requestedDevices.filter(v => typeof v === "number") : [];
       const withSamples = devices ? Object.entries(devices).filter(([, d]) => typeof d.samples === "number" && d.samples > 0) : [];
       const parseErrors = msprof.csv_parse_errors && Array.isArray(msprof.csv_parse_errors) ? msprof.csv_parse_errors.length : 0;
       const status = withSamples.length === 0 ? "missing（无有效样本）"

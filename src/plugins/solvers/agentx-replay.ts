@@ -128,7 +128,7 @@ export class AgentXReplaySolver implements Solver {
       const periodSec = workload.durationSeconds;
       const metricsUrl = this.config.telemetry?.vllm?.endpoint ??
         (session.modelEndpoint?.baseUrl ? agentXEndpoint(session.modelEndpoint.baseUrl).url + "/metrics" : undefined);
-      msprofCollection = startMsprofCollection(resolveMsprofSettings(msprofConfig, metricsUrl), join(context.paths.agent, "msprof"), periodSec,
+      msprofCollection = startMsprofCollection(resolveMsprofSettings(msprofConfig, metricsUrl), context.paths.agent, periodSec,
         context.signal, this.runtime.environmentName === "local" ? python : undefined);
     }
     const telemetryBridge = this.config.telemetry === undefined ? undefined : bridgeTelemetry(this.config.telemetry);
@@ -196,6 +196,7 @@ export class AgentXReplaySolver implements Solver {
       if (sampling) telemetry = { ...expectRecord(telemetry, "host telemetry evidence"), localAscend: await sampling.finish() };
       if (telemetryBridge && (telemetryBridge.vllm || telemetryBridge.ascend)) summary.telemetry = normalizeTelemetry(telemetryBridge, this.binding.model.name, telemetry);
       if (msprofCollection) {
+        await msprofCollection.stop();
         const msprofResult = await msprofCollection.result;
         if (msprofResult.status === "completed" && msprofResult.summary) (summary as Record<string, unknown>).msprof = msprofResult.summary;
         const requestedDevices = msprofResult.summary?.requestedDevices ?? msprofCollection.requestedDevices;

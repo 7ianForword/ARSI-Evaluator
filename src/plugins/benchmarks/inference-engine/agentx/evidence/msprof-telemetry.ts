@@ -6,7 +6,7 @@ import { expectRecord, rejectUnknown } from "../../../../../core/validation/inpu
 
 /** msprof service-level profiling config (opt-in, alongside vllm/ascend telemetry). */
 export type MsprofConfig = {
-  /** Explicit card/chip list, or "all" resolved on the host via npu-smi at collection time. */
+  /** Explicit npu-smi physical card list, or "all" resolved to msprof chip IDs at collection time. */
   devices: "all" | { deviceId: number }[];
   freqHz: number;
   metrics: string;
@@ -21,7 +21,9 @@ export type MsprofConfig = {
 export type MsprofSummary = {
   schemaVersion: 1;
   kind: "profiling-summary";
-  requestedDevices?: number[];
+  requestedDevices?: number[] | ["all"];
+  resolvedDevices?: number[];
+  deviceMapping?: Record<string, number[]>;
   aggregate: { device_count: number; mac_fp16_ratio_mean: number | null };
   devices: Record<string, { mac_fp16_ratio: number; mac_int8_ratio: number | null; samples: number }>;
   availability: Record<string, string>;
@@ -31,7 +33,7 @@ export type MsprofSummary = {
 
 export type MsprofResult = { status: "completed" | "error"; summary?: MsprofSummary; window?: Record<string, unknown>; code?: string; detail?: string };
 
-/** Stoppable collection handle; `stop` also reclaims the helper process tree. */
+/** Stoppable collection handle; `stop` asks helper to close, then reclaims if it stalls. */
 export type MsprofCollection = {
   requestedDevices: number[] | "all";
   result: Promise<MsprofResult>;
@@ -40,9 +42,10 @@ export type MsprofCollection = {
 
 /** Fill only missing traffic-detection fields from solver context. */
 export function resolveMsprofSettings(config: MsprofConfig, inferredMetricsUrl?: string): MsprofConfig {
-  if (config.metricsUrl !== undefined || inferredMetricsUrl === undefined) return config;
-  return { ...config, metricsUrl: inferredMetricsUrl,
-    ...(config.waitForTraffic === undefined ? { waitForTraffic: true } : {}) };
+  const metricsUrl = config.metricsUrl ?? inferredMetricsUrl;
+  if (metricsUrl === undefined) return config;
+  if (config.waitForTraffic !== undefined) return { ...config, metricsUrl };
+  return { ...config, metricsUrl, waitForTraffic: true };
 }
 
 export function parseMsprofConfig(value: unknown): MsprofConfig {
@@ -95,20 +98,48 @@ export function parseMsprofConfig(value: unknown): MsprofConfig {
       throw new TypeError("Invalid msprof metricsUrl: must be http(s)");
     return raw.metricsUrl;
   })();
-  const waitForTraffic = raw.waitForTraffic === true;
-  return { devices, freqHz, metrics, includeHbm, waitForTraffic, ...(metricsUrl === undefined ? {} : { metricsUrl }) };
+  const waitForTraffic = raw.waitForTraffic === undefined ? undefined : (() => {
+    if (typeof raw.waitForTraffic !== "boolean") throw new TypeError("Invalid msprof waitForTraffic");
+    return raw.waitForTraffic;
+  })();
+  return { devices, freqHz, metrics, includeHbm, ...(waitForTraffic === undefined ? {} : { waitForTraffic }), ...(metricsUrl === undefined ? {} : { metricsUrl }) };
 }
 
 export function parseMsprofSummary(value: unknown): MsprofSummary {
   const raw = expectRecord(value, "msprof summary");
-  rejectUnknown(raw, ["schemaVersion", "kind", "requestedDevices", "aggregate", "devices", "availability", "csv_parse_errors", "sqlite_devices"], "msprof summary");
+  rejectUnknown(raw, ["schemaVersion", "kind", "requestedDevices", "resolvedDevices", "deviceMapping", "aggregate", "devices", "availability", "csv_parse_errors", "sqlite_devices"], "msprof summary");
   if (raw.schemaVersion !== 1 || raw.kind !== "profiling-summary")
     throw new TypeError("Invalid msprof summary schema");
   if (raw.requestedDevices !== undefined) {
     const requested = raw.requestedDevices;
-    if (!Array.isArray(requested) || !requested.length ||
-        requested.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0))
+    const all = Array.isArray(requested) && requested.length === 1 && requested[0] === "all";
+    if (!Array.isArray(requested) || !requested.length || (!all && requested.some(entry =>
+      entry === "all" || typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0)) ||
+      (all && (raw.resolvedDevices === undefined || raw.deviceMapping === undefined)))
       throw new TypeError("Invalid msprof requestedDevices");
+  }
+  if (raw.resolvedDevices !== undefined) {
+    const resolved = raw.resolvedDevices;
+    if (!Array.isArray(resolved) || !resolved.length ||
+        resolved.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0))
+      throw new TypeError("Invalid msprof resolvedDevices");
+  }
+  if (raw.deviceMapping !== undefined) {
+    const mapping = expectRecord(raw.deviceMapping, "msprof summary deviceMapping");
+    const keys = Object.keys(mapping);
+    const mappedChips = Object.values(mapping).flat().filter((entry): entry is number =>
+      typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0);
+    const invalidMapping = !keys.length || keys.some(key => !/^[0-9]+$/u.test(key)) ||
+      Object.values(mapping).some(chips => !Array.isArray(chips) || !chips.length ||
+        chips.some(entry => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0)) ||
+      new Set(mappedChips).size !== mappedChips.length;
+    const resolved = raw.resolvedDevices;
+    const mappingMatchesResolved = !Array.isArray(resolved) ||
+      (mappedChips.length === resolved.length &&
+       [...mappedChips].sort((left, right) => left - right)
+         .every((entry, index) => entry === resolved[index]));
+    if (invalidMapping || !mappingMatchesResolved)
+      throw new TypeError("Invalid msprof deviceMapping");
   }
   const aggregate = expectRecord(raw.aggregate, "msprof summary aggregate");
   rejectUnknown(aggregate, ["device_count", "mac_fp16_ratio_mean"], "msprof summary aggregate");
@@ -223,10 +254,11 @@ export function startMsprofCollection(
       stopped = true;
       await mkdir(join(artifacts, "msprof"), { recursive: true }).catch(() => undefined);
       await writeFile(stopFile, `${new Date().toISOString()}\n`, "utf8").catch(() => undefined);
-      if (!settled && child?.pid) child.kill("SIGTERM");
-      const hardKill = setTimeout(() => { if (!settled) child?.kill("SIGKILL"); }, 15000);
-      hardKill.unref?.();
-      try { await result; } finally { clearTimeout(hardKill); }
+      const gracefulKill = setTimeout(() => { if (!settled) child?.kill("SIGTERM"); }, 30000);
+      const forceKill = setTimeout(() => { if (!settled) child?.kill("SIGKILL"); }, 45000);
+      gracefulKill.unref?.();
+      forceKill.unref?.();
+      try { await result; } finally { clearTimeout(gracefulKill); clearTimeout(forceKill); }
     },
   };
 }
